@@ -1127,39 +1127,95 @@ async function main() {
 	let avgFps = 0;
 	let start = 0;
 
+//add camera noise
+	// Adapted from p5.js implementation
+	let noisePermutations;
+	function generateNoisePermutations() {
+		const arr = Array.from({ length: 256 }, (_, i) => i);
+		for (let i = 0; i < arr.length; i++) {
+			const j = Math.floor(Math.random() * (i + 1));
+			[arr[i], arr[j]] = [arr[j], arr[i]];
+		}
+		return arr.concat(arr);
+	}
+
+	function fade(t) {
+		return t * t * t * (t * (t * 6 - 15) + 10);
+	}
+
+	function lerp(a, b, t) {
+		return (1 - t) * a + t * b;
+	}
+
+	function grad(hash, x) {
+		const h = hash & 15;
+		const grad = 1 + (h & 7); // Gradient value is one of 8 values
+		return grad * x; // Compute the dot product
+	}
+
+	function noise(x) {
+		if (!noisePermutations) {
+			noisePermutations = generateNoisePermutations();
+		}
+
+		const X = Math.floor(x) & 255;
+		const xDiff = x - Math.floor(x);
+
+		const u = fade(xDiff);
+
+		return lerp(grad(noisePermutations[X], xDiff), grad(noisePermutations[X + 1], xDiff - 1), u) * 2;
+	}
+
+	let noiseOffsetX = 0;
+	let noiseOffsetY = 1000;  // Start with different initial offsets
+	let noiseOffsetZ = 2000;
+	
+	function getNoise(offset) {
+	  return (noise(offset) - 0.0) * 2; // Normalizing to be between -1 and 1
+	}
+
 	const frame = (now) => {
 		let inv = invert4(viewMatrix);
+	
+		// Apply noise for constant camera shake
+		noiseOffsetX += 0.1;
+		noiseOffsetY += 0.1;
+		noiseOffsetZ += 0.1;
+		const noiseValueX = getNoise(noiseOffsetX);
+		const noiseValueY = getNoise(noiseOffsetY);
+		const noiseValueZ = getNoise(noiseOffsetZ);
+		inv = translate4(inv, noiseValueX * 0.0003, noiseValueY * 0.0003, noiseValueZ * 0.00001);
 
 		if (activeKeys.includes("ArrowUp")) {
 			if (activeKeys.includes("Shift")) {
-				inv = translate4(inv, 0, -0.03, 0);
+				inv = translate4(inv, 0, -0.001, 0);
 			} else {
 				let preY = inv[13];
-				inv = translate4(inv, 0, 0, 0.1);
+				inv = translate4(inv, 0, 0, 0.001);
 				inv[13] = preY;
 			}
 		}
 		if (activeKeys.includes("ArrowDown")) {
 			if (activeKeys.includes("Shift")) {
-				inv = translate4(inv, 0, 0.03, 0);
+				inv = translate4(inv, 0, 0.001, 0);
 			} else {
 				let preY = inv[13];
-				inv = translate4(inv, 0, 0, -0.1);
+				inv = translate4(inv, 0, 0, -0.001);
 				inv[13] = preY;
 			}
 		}
 		if (activeKeys.includes("ArrowLeft"))
-			inv = translate4(inv, -0.03, 0, 0);
+			inv = translate4(inv, -0.001, 0, 0); //org -0.03
 		//
 		if (activeKeys.includes("ArrowRight"))
-			inv = translate4(inv, 0.03, 0, 0);
+			inv = translate4(inv, 0.001, 0, 0);
 		// inv = rotate4(inv, 0.01, 0, 1, 0);
-		if (activeKeys.includes("a")) inv = rotate4(inv, -0.01, 0, 1, 0);
-		if (activeKeys.includes("d")) inv = rotate4(inv, 0.01, 0, 1, 0);
-		if (activeKeys.includes("q")) inv = rotate4(inv, 0.01, 0, 0, 1);
-		if (activeKeys.includes("e")) inv = rotate4(inv, -0.01, 0, 0, 1);
-		if (activeKeys.includes("w")) inv = rotate4(inv, 0.005, 1, 0, 0);
-		if (activeKeys.includes("s")) inv = rotate4(inv, -0.005, 1, 0, 0);
+		if (activeKeys.includes("a")) inv = rotate4(inv, -0.001, 0, 1, 0);//org minus en null
+		if (activeKeys.includes("d")) inv = rotate4(inv, 0.001, 0, 1, 0);
+		if (activeKeys.includes("q")) inv = rotate4(inv, 0.001, 0, 0, 1);
+		if (activeKeys.includes("e")) inv = rotate4(inv, -0.001, 0, 0, 1);
+		if (activeKeys.includes("w")) inv = rotate4(inv, 0.0005, 1, 0, 0);
+		if (activeKeys.includes("s")) inv = rotate4(inv, -0.0005, 1, 0, 0);
 
 		if (["j", "k", "l", "i"].some((k) => activeKeys.includes(k))) {
 			let d = 4;
@@ -1192,6 +1248,7 @@ async function main() {
 		// inv[13] = preY;
 		viewMatrix = invert4(inv);
 
+		/*
 		if (carousel) {
 			let inv = invert4(defaultViewMatrix);
 
@@ -1199,6 +1256,31 @@ async function main() {
 			inv = translate4(inv, 2.5 * t, 0, 6 * (1 - Math.cos(t)));
 			inv = rotate4(inv, -0.6 * t, 0, 1, 0);
 
+			viewMatrix = invert4(inv);
+		}
+		*/
+
+		if (carousel) {
+
+			let inv = invert4(defaultViewMatrix);
+//			let inv = invert4(viewMatrix);
+	
+			// Apply noise for constant camera shake
+			noiseOffsetX += 0.1;
+			noiseOffsetY += 0.1;
+			noiseOffsetZ += 0.1;
+			const noiseValueX = getNoise(noiseOffsetX);
+			const noiseValueY = getNoise(noiseOffsetY);
+			const noiseValueZ = getNoise(noiseOffsetZ);
+			inv = translate4(inv, noiseValueX * 0.0003, noiseValueY * 0.0003, noiseValueZ * 0.00001);
+	
+			const t = (Date.now() - start) % 50000 / 15000; // Reset t every 50000 ms (50 seconds)
+			const scaledT = 2 * Math.PI * t / 10; // Scale t to span a full circle in 50 seconds
+		
+			inv = translate4(inv, 2.5 * Math.sin(scaledT), 0, 6 * (1 - Math.cos(scaledT)));
+			//inv = translate4(inv, 2.5 * t, 0, 6 * (1 - Math.cos(t)));
+			inv = rotate4(inv, -1.2 * scaledT, 0, 1, 0);
+		
 			viewMatrix = invert4(inv);
 		}
 
