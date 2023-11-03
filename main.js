@@ -1,3 +1,6 @@
+let needUpdate = false; // Flag to check if an immediate update is needed
+let globalScaleFactor = 1.0; // The scale factor you want to send
+	
 let cameras = [
 	{
 		id: 0,
@@ -290,6 +293,7 @@ function createWorker(self) {
 	let buffer;
 	let vertexCount = 0;
 	let viewProj;
+	let globalScaleFactor = 1;
 	// 6*4 + 4 + 4 = 8*4
 	// XYZ - Position (Float32)
 	// XYZ - Scale (Float32)
@@ -301,7 +305,6 @@ function createWorker(self) {
 
 	const runSort = (viewProj) => {
 		if (!buffer) return;
-
 		const f_buffer = new Float32Array(buffer);
 		const u_buffer = new Uint8Array(buffer);
 
@@ -311,15 +314,18 @@ function createWorker(self) {
 		const center = new Float32Array(3 * vertexCount);
 		const color = new Float32Array(4 * vertexCount);
 
+		//test to see if needs update or just leave it. 
+		/*
 		if (depthIndex.length == vertexCount) {
 			let dot =
 				lastProj[2] * viewProj[2] +
 				lastProj[6] * viewProj[6] +
-				lastProj[10] * viewProj[10];
+				lastProj[10] * viewProj[10];	
 			if (Math.abs(dot - 1) < 0.01) {
-				return;
+				return; //removed this to trigger update on load
 			}
 		}
+		*/
 
 		let maxDepth = -Infinity;
 		let minDepth = Infinity;
@@ -365,9 +371,9 @@ function createWorker(self) {
 			color[4 * j + 3] = u_buffer[32 * i + 24 + 3] / 255;
 
 			let scale = [
-				f_buffer[8 * i + 3 + 0],
-				f_buffer[8 * i + 3 + 1],
-				f_buffer[8 * i + 3 + 2],
+				f_buffer[8 * i + 3 + 0] * globalScaleFactor,
+				f_buffer[8 * i + 3 + 1] * globalScaleFactor,
+				f_buffer[8 * i + 3 + 2] * globalScaleFactor,
 			];
 			let rot = [
 				(u_buffer[32 * i + 28 + 0] - 128) / 128,
@@ -417,10 +423,17 @@ function createWorker(self) {
 			color.buffer,
 			covB.buffer,
 		]);
-
+		//console.log("selfpostmessage");
+	
+		self.addEventListener("message", function(event) {
+			if (event.data.type === "setGlobalScaleFactor") {
+				globalScaleFactor = event.data.value;
+				// Now globalScaleFactor in the worker is set to the value received from the main thread
+			}
+		});
 		// console.timeEnd("sort");
 	};
-
+	
 	function processPlyBuffer(inputBuffer) {
 		const ubuf = new Uint8Array(inputBuffer);
 		// 10KB ought to be enough for a header...
@@ -889,6 +902,7 @@ async function main() {
 
 			gl.bindBuffer(gl.ARRAY_BUFFER, covBBuffer);
 			gl.bufferData(gl.ARRAY_BUFFER, covB, gl.DYNAMIC_DRAW);
+			//console.log("update");
 		}
 	};
 
@@ -896,9 +910,10 @@ async function main() {
 
 	window.addEventListener("keydown", (e) => {
 		// if (document.activeElement != document.body) return;
-		carousel = false;
+		//carousel = false;
 		if (!activeKeys.includes(e.key)) activeKeys.push(e.key);
 		if (/\d/.test(e.key)) {
+			carousel = false;
 			viewMatrix = getViewMatrix(cameras[parseInt(e.key)]);
 		}
 		if (e.key == "v") {
@@ -1244,7 +1259,7 @@ async function main() {
 			);
 			inv = translate4(inv, 0, 0, -d);
 		}
-
+		
 		// inv[13] = preY;
 		viewMatrix = invert4(inv);
 
@@ -1259,7 +1274,11 @@ async function main() {
 			viewMatrix = invert4(inv);
 		}
 		*/
+		if (needUpdate) {
+			// Your logic for handling the updated model or resized object
+			needUpdate = false; // Reset the flag
 
+		}
 		if (carousel) {
 
 			let inv = invert4(defaultViewMatrix);
@@ -1325,47 +1344,52 @@ async function main() {
 
 	frame();
 
+	const processModel = (arrayBuffer, fileName) => {
+		if (/\.json$/i.test(fileName)) {
+			cameras = JSON.parse(arrayBuffer);
+			viewMatrix = getViewMatrix(cameras[0]);
+			projectionMatrix = getProjectionMatrix(
+				camera.fx / downsample,
+				camera.fy / downsample,
+				canvas.width,
+				canvas.height,
+			);
+			gl.uniformMatrix4fv(u_projection, false, projectionMatrix);
+
+			console.log("Loaded Cameras");
+		} else {
+			const splatData = new Uint8Array(arrayBuffer);
+			console.log("Loaded", Math.floor(splatData.length / rowLength));
+
+			if (
+				splatData[0] == 112 &&
+				splatData[1] == 108 &&
+				splatData[2] == 121 &&
+				splatData[3] == 10
+			) {
+				// ply file magic header means it should be handled differently
+				worker.postMessage({ ply: splatData.buffer });
+			} else {
+				worker.postMessage({
+					buffer: splatData.buffer,
+					vertexCount: Math.floor(splatData.length / rowLength),
+				});
+			}
+		}
+	};
+
 	const selectFile = (file) => {
 		const fr = new FileReader();
+		fr.onload = () => {
+			processModel(fr.result, file.name);
+		};
 		if (/\.json$/i.test(file.name)) {
-			fr.onload = () => {
-				cameras = JSON.parse(fr.result);
-				viewMatrix = getViewMatrix(cameras[0]);
-				projectionMatrix = getProjectionMatrix(
-					camera.fx / downsample,
-					camera.fy / downsample,
-					canvas.width,
-					canvas.height,
-				);
-				gl.uniformMatrix4fv(u_projection, false, projectionMatrix);
-
-				console.log("Loaded Cameras");
-			};
 			fr.readAsText(file);
 		} else {
-			stopLoading = true;
-			fr.onload = () => {
-				splatData = new Uint8Array(fr.result);
-				console.log("Loaded", Math.floor(splatData.length / rowLength));
-
-				if (
-					splatData[0] == 112 &&
-					splatData[1] == 108 &&
-					splatData[2] == 121 &&
-					splatData[3] == 10
-				) {
-					// ply file magic header means it should be handled differently
-					worker.postMessage({ ply: splatData.buffer });
-				} else {
-					worker.postMessage({
-						buffer: splatData.buffer,
-						vertexCount: Math.floor(splatData.length / rowLength),
-					});
-				}
-			};
 			fr.readAsArrayBuffer(file);
 		}
 	};
+	
 
 	window.addEventListener("hashchange", (e) => {
 		try {
@@ -1386,6 +1410,59 @@ async function main() {
 		e.stopPropagation();
 		selectFile(e.dataTransfer.files[0]);
 	});
+
+	//load next with key h
+	let modelIndex = 0;
+
+
+	const directoryPath = './vision/';
+	const filenamePrefix = 'vision';  // The common prefix for all files
+	const filenameExtension = '.model';
+
+	window.addEventListener('keydown', function(event) {
+		if (event.key === 'h') {
+			// Create the complete file name using the current index
+			const fileName = `${directoryPath}${filenamePrefix}${String(modelIndex).padStart(5, '0')}${filenameExtension}`;
+
+			// Load model as arrayBuffer and call processModel
+			fetch(fileName)
+				.then(response => {
+					if (!response.ok) {
+						throw new Error('File not found');
+						modelIndex = 0;
+					}
+					return response.arrayBuffer();
+				})
+				.then(buffer => {
+					processModel(buffer, fileName);
+				})
+				.catch(error => {
+					console.error("An error occurred: ", error);
+					modelIndex = 0;  // Reset the counter if file not found
+				});
+			
+			// Increment the index for the next iteration
+			modelIndex++;
+			needUpdate = true;
+		}
+	});
+	//controll splat size
+	
+	window.addEventListener('keydown', function(event) {
+		if (event.key === 'm') {
+		  	globalScaleFactor *= 1.1; // Increase size by 10%
+		  	// Send the globalScaleFactor to the worker
+			worker.postMessage({ type: "setGlobalScaleFactor", value: globalScaleFactor });
+			needUpdate = true; // Set the flag for an immediate update
+		} else if (event.key === 'n') {
+			globalScaleFactor *= 0.9; // Decrease size by 10%
+			// Send the globalScaleFactor to the worker
+			worker.postMessage({ type: "setGlobalScaleFactor", value: globalScaleFactor });
+			needUpdate = true; // Set the flag for an immediate update
+		}
+	});
+
+
 
 	window.addEventListener('resize', (e) => {
 		const canvas = document.getElementById("canvas");
@@ -1410,6 +1487,7 @@ async function main() {
 				vertexCount: Math.floor(bytesRead / rowLength),
 			});
 			lastVertexCount = vertexCount;
+			//console.log("postvertexcount");
 		}
 	}
 	if (!stopLoading)
