@@ -18,12 +18,28 @@ You can [try it out here](https://antimatter15.com/splat/).
 https://github.com/antimatter15/splat/assets/30054/878d5d34-e0a7-4336-85df-111ff22daf4b
 
 
+Open html locally using python server
+python -m http.server 8000
+
+to convert a .ply file list to .splat use
+http://localhost:8000/browser_converter.html
+
+otherwise start the viewer
+http://localhost:8000/index.html
 
 ## controls
 
+new controls (forked)
+
+- g/h to load new splat, prev or next from folder
+– f to load a folder of plys and transform to splats
+- n / m to decrease increase size of splat
+
+ctrl plus number to load new splat
+
 movement (arrow keys)
 
-- left/right arrow keys to strafe side to side
+- left/right arrow keys to strafe side to side (alternative ø@åæ)
 - up/down arrow keys to move forward/back
 - `space` to jump
 

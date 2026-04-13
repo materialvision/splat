@@ -1,6 +1,18 @@
 let needUpdate = false; // Flag to check if an immediate update is needed
 let globalScaleFactor = 1.0; // The scale factor you want to send
-	
+let vertexLimit = 130000;
+// Define the folder paths
+const splatFolders = [
+	'./splats/a_three_dimensional_image_of_a_smooth_sundown_in_metal_alloy_pocket_sized_sculpture_terraced_garden_aureate_CGI_asset_luxurious_stunning_ebon_stage/',
+	'./splats/an_ethereal_projection_of_eggshell_barriers_transcendent_clarity_divine_ink_black_backdrop_butter_smooth/',
+	'./splats/xilitla/',
+	'./splats/casa_lysekrone2/',
+	'./splats/jungleruinwalk2/',
+	'./splats/city3/',
+	'./splats/palm/',
+	'./splats/circ2/',
+	'./splats/dikemark3/',
+];
 let cameras = [
 	{
 		id: 0,
@@ -294,6 +306,10 @@ function createWorker(self) {
 	let vertexCount = 0;
 	let viewProj;
 	let globalScaleFactor = 1;
+	let randomOffsetX = 0;
+	let randomOffsetY = 0;
+	let randomOffsetZ = 0;
+	const randomScale = 0.01; // Adjust this scale as needed
 	// 6*4 + 4 + 4 = 8*4
 	// XYZ - Position (Float32)
 	// XYZ - Scale (Float32)
@@ -345,78 +361,107 @@ function createWorker(self) {
 
 		// This is a 16 bit single-pass counting sort
 		let depthInv = (256 * 256) / (maxDepth - minDepth);
-		let counts0 = new Uint32Array(256*256);
+		let counts0 = new Uint32Array(256 * 256);
 		for (let i = 0; i < vertexCount; i++) {
 			sizeList[i] = ((sizeList[i] - minDepth) * depthInv) | 0;
 			counts0[sizeList[i]]++;
 		}
-		let starts0 = new Uint32Array(256*256);
-		for (let i = 1; i < 256*256; i++) starts0[i] = starts0[i - 1] + counts0[i - 1];
+		let starts0 = new Uint32Array(256 * 256);
+		for (let i = 1; i < 256 * 256; i++) starts0[i] = starts0[i - 1] + counts0[i - 1];
 		depthIndex = new Uint32Array(vertexCount);
 		for (let i = 0; i < vertexCount; i++) depthIndex[starts0[sizeList[i]]++] = i;
-		
+
 
 		lastProj = viewProj;
 		// console.timeEnd("sort");
-		for (let j = 0; j < vertexCount; j++) {
-			const i = depthIndex[j];
+		let moduloValue;
 
-			center[3 * j + 0] = f_buffer[8 * i + 0];
-			center[3 * j + 1] = f_buffer[8 * i + 1];
-			center[3 * j + 2] = f_buffer[8 * i + 2];
-
-			color[4 * j + 0] = u_buffer[32 * i + 24 + 0] / 255;
-			color[4 * j + 1] = u_buffer[32 * i + 24 + 1] / 255;
-			color[4 * j + 2] = u_buffer[32 * i + 24 + 2] / 255;
-			color[4 * j + 3] = u_buffer[32 * i + 24 + 3] / 255;
-
-			let scale = [
-				f_buffer[8 * i + 3 + 0] * globalScaleFactor,
-				f_buffer[8 * i + 3 + 1] * globalScaleFactor,
-				f_buffer[8 * i + 3 + 2] * globalScaleFactor,
-			];
-			let rot = [
-				(u_buffer[32 * i + 28 + 0] - 128) / 128,
-				(u_buffer[32 * i + 28 + 1] - 128) / 128,
-				(u_buffer[32 * i + 28 + 2] - 128) / 128,
-				(u_buffer[32 * i + 28 + 3] - 128) / 128,
-			];
-
-			const R = [
-				1.0 - 2.0 * (rot[2] * rot[2] + rot[3] * rot[3]),
-				2.0 * (rot[1] * rot[2] + rot[0] * rot[3]),
-				2.0 * (rot[1] * rot[3] - rot[0] * rot[2]),
-
-				2.0 * (rot[1] * rot[2] - rot[0] * rot[3]),
-				1.0 - 2.0 * (rot[1] * rot[1] + rot[3] * rot[3]),
-				2.0 * (rot[2] * rot[3] + rot[0] * rot[1]),
-
-				2.0 * (rot[1] * rot[3] + rot[0] * rot[2]),
-				2.0 * (rot[2] * rot[3] - rot[0] * rot[1]),
-				1.0 - 2.0 * (rot[1] * rot[1] + rot[2] * rot[2]),
-			];
-
-			// Compute the matrix product of S and R (M = S * R)
-			const M = [
-				scale[0] * R[0],
-				scale[0] * R[1],
-				scale[0] * R[2],
-				scale[1] * R[3],
-				scale[1] * R[4],
-				scale[1] * R[5],
-				scale[2] * R[6],
-				scale[2] * R[7],
-				scale[2] * R[8],
-			];
-
-			covA[3 * j + 0] = M[0] * M[0] + M[3] * M[3] + M[6] * M[6];
-			covA[3 * j + 1] = M[0] * M[1] + M[3] * M[4] + M[6] * M[7];
-			covA[3 * j + 2] = M[0] * M[2] + M[3] * M[5] + M[6] * M[8];
-			covB[3 * j + 0] = M[1] * M[1] + M[4] * M[4] + M[7] * M[7];
-			covB[3 * j + 1] = M[1] * M[2] + M[4] * M[5] + M[7] * M[8];
-			covB[3 * j + 2] = M[2] * M[2] + M[5] * M[5] + M[8] * M[8];
+		if (vertexCount > 800000) {
+			moduloValue = 4; // Use modulo 4 when vertexCount is over 800,000
+		} else if (vertexCount > 600000) {
+			moduloValue = 3; // Use modulo 3 when vertexCount is over 600,000
+		} else if (vertexCount > 400000) {
+			moduloValue = 2; // Use modulo 2 when vertexCount is over 400,000
+		} else {
+			moduloValue = 1; // No skipping when vertexCount is 400,000 or below
 		}
 
+		for (let j = 0; j < vertexCount; j++) {
+			if (j % moduloValue === 0) {
+				const i = depthIndex[j];
+
+				// Apply noise for variable center shake
+				//noiseOffsetX += 0.1;
+				//noiseOffsetY += 0.1;
+				//noiseOffsetZ += 0.1;
+
+				// Generate a random offset for each dimension
+
+				//randomOffsetX = getNoise(noiseOffsetX)*0.006;
+				//randomOffsetY = getNoise(noiseOffsetY)*0.006;
+				//randomOffsetZ = getNoise(noiseOffsetZ)*0.006;
+				if (vertexCount < 400000) {
+					randomOffsetX = (Math.random() - 0.5) * randomScale;
+					randomOffsetY = (Math.random() - 0.5) * randomScale;
+					randomOffsetZ = (Math.random() - 0.5) * randomScale;
+				}
+
+				center[3 * j + 0] = f_buffer[8 * i + 0] + randomOffsetX;
+				center[3 * j + 1] = f_buffer[8 * i + 1] + randomOffsetY;
+				center[3 * j + 2] = f_buffer[8 * i + 2] + randomOffsetZ;
+
+				color[4 * j + 0] = u_buffer[32 * i + 24 + 0] / 255;
+				color[4 * j + 1] = u_buffer[32 * i + 24 + 1] / 255;
+				color[4 * j + 2] = u_buffer[32 * i + 24 + 2] / 255;
+				color[4 * j + 3] = u_buffer[32 * i + 24 + 3] / 255;
+
+				let scale = [
+					f_buffer[8 * i + 3 + 0] * globalScaleFactor,
+					f_buffer[8 * i + 3 + 1] * globalScaleFactor,
+					f_buffer[8 * i + 3 + 2] * globalScaleFactor,
+				];
+				let rot = [
+					(u_buffer[32 * i + 28 + 0] - 128) / 128,
+					(u_buffer[32 * i + 28 + 1] - 128) / 128,
+					(u_buffer[32 * i + 28 + 2] - 128) / 128,
+					(u_buffer[32 * i + 28 + 3] - 128) / 128,
+				];
+
+				const R = [
+					1.0 - 2.0 * (rot[2] * rot[2] + rot[3] * rot[3]),
+					2.0 * (rot[1] * rot[2] + rot[0] * rot[3]),
+					2.0 * (rot[1] * rot[3] - rot[0] * rot[2]),
+
+					2.0 * (rot[1] * rot[2] - rot[0] * rot[3]),
+					1.0 - 2.0 * (rot[1] * rot[1] + rot[3] * rot[3]),
+					2.0 * (rot[2] * rot[3] + rot[0] * rot[1]),
+
+					2.0 * (rot[1] * rot[3] + rot[0] * rot[2]),
+					2.0 * (rot[2] * rot[3] - rot[0] * rot[1]),
+					1.0 - 2.0 * (rot[1] * rot[1] + rot[2] * rot[2]),
+				];
+
+				// Compute the matrix product of S and R (M = S * R)
+				const M = [
+					scale[0] * R[0],
+					scale[0] * R[1],
+					scale[0] * R[2],
+					scale[1] * R[3],
+					scale[1] * R[4],
+					scale[1] * R[5],
+					scale[2] * R[6],
+					scale[2] * R[7],
+					scale[2] * R[8],
+				];
+
+				covA[3 * j + 0] = M[0] * M[0] + M[3] * M[3] + M[6] * M[6];
+				covA[3 * j + 1] = M[0] * M[1] + M[3] * M[4] + M[6] * M[7];
+				covA[3 * j + 2] = M[0] * M[2] + M[3] * M[5] + M[6] * M[8];
+				covB[3 * j + 0] = M[1] * M[1] + M[4] * M[4] + M[7] * M[7];
+				covB[3 * j + 1] = M[1] * M[2] + M[4] * M[5] + M[7] * M[8];
+				covB[3 * j + 2] = M[2] * M[2] + M[5] * M[5] + M[8] * M[8];
+			}
+		}
 		self.postMessage({ covA, center, color, covB, viewProj }, [
 			covA.buffer,
 			center.buffer,
@@ -424,8 +469,8 @@ function createWorker(self) {
 			covB.buffer,
 		]);
 		//console.log("selfpostmessage");
-	
-		self.addEventListener("message", function(event) {
+
+		self.addEventListener("message", function (event) {
 			if (event.data.type === "setGlobalScaleFactor") {
 				globalScaleFactor = event.data.value;
 				// Now globalScaleFactor in the worker is set to the value received from the main thread
@@ -433,153 +478,8 @@ function createWorker(self) {
 		});
 		// console.timeEnd("sort");
 	};
-	
-	function processPlyBuffer(inputBuffer) {
-		const ubuf = new Uint8Array(inputBuffer);
-		// 10KB ought to be enough for a header...
-		const header = new TextDecoder().decode(ubuf.slice(0, 1024 * 10));
-		const header_end = "end_header\n";
-		const header_end_index = header.indexOf(header_end);
-		if (header_end_index < 0)
-			throw new Error("Unable to read .ply file header");
-		const vertexCount = parseInt(/element vertex (\d+)\n/.exec(header)[1]);
-		console.log("Vertex Count", vertexCount);
-		let row_offset = 0,
-			offsets = {},
-			types = {};
-		const TYPE_MAP = {
-			double: "getFloat64",
-			int: "getInt32",
-			uint: "getUint32",
-			float: "getFloat32",
-			short: "getInt16",
-			ushort: "getUint16",
-			uchar: "getUint8",
-		};
-		for (let prop of header
-			.slice(0, header_end_index)
-			.split("\n")
-			.filter((k) => k.startsWith("property "))) {
-			const [p, type, name] = prop.split(" ");
-			const arrayType = TYPE_MAP[type] || "getInt8";
-			types[name] = arrayType;
-			offsets[name] = row_offset;
-			row_offset += parseInt(arrayType.replace(/[^\d]/g, "")) / 8;
-		}
-		console.log("Bytes per row", row_offset, types, offsets);
 
-		let dataView = new DataView(
-			inputBuffer,
-			header_end_index + header_end.length,
-		);
-		let row = 0;
-		const attrs = new Proxy(
-			{},
-			{
-				get(target, prop) {
-					if (!types[prop]) throw new Error(prop + " not found");
-					return dataView[types[prop]](
-						row * row_offset + offsets[prop],
-						true,
-					);
-				},
-			},
-		);
-
-		console.time("calculate importance");
-		let sizeList = new Float32Array(vertexCount);
-		let sizeIndex = new Uint32Array(vertexCount);
-		for (row = 0; row < vertexCount; row++) {
-			sizeIndex[row] = row;
-			if (!types["scale_0"]) continue;
-			const size =
-				Math.exp(attrs.scale_0) *
-				Math.exp(attrs.scale_1) *
-				Math.exp(attrs.scale_2);
-			const opacity = 1 / (1 + Math.exp(-attrs.opacity));
-			sizeList[row] = size * opacity;
-		}
-		console.timeEnd("calculate importance");
-
-		console.time("sort");
-		sizeIndex.sort((b, a) => sizeList[a] - sizeList[b]);
-		console.timeEnd("sort");
-
-		// 6*4 + 4 + 4 = 8*4
-		// XYZ - Position (Float32)
-		// XYZ - Scale (Float32)
-		// RGBA - colors (uint8)
-		// IJKL - quaternion/rot (uint8)
-		const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
-		const buffer = new ArrayBuffer(rowLength * vertexCount);
-
-		console.time("build buffer");
-		for (let j = 0; j < vertexCount; j++) {
-			row = sizeIndex[j];
-
-			const position = new Float32Array(buffer, j * rowLength, 3);
-			const scales = new Float32Array(buffer, j * rowLength + 4 * 3, 3);
-			const rgba = new Uint8ClampedArray(
-				buffer,
-				j * rowLength + 4 * 3 + 4 * 3,
-				4,
-			);
-			const rot = new Uint8ClampedArray(
-				buffer,
-				j * rowLength + 4 * 3 + 4 * 3 + 4,
-				4,
-			);
-
-			if (types["scale_0"]) {
-				const qlen = Math.sqrt(
-					attrs.rot_0 ** 2 +
-						attrs.rot_1 ** 2 +
-						attrs.rot_2 ** 2 +
-						attrs.rot_3 ** 2,
-				);
-
-				rot[0] = (attrs.rot_0 / qlen) * 128 + 128;
-				rot[1] = (attrs.rot_1 / qlen) * 128 + 128;
-				rot[2] = (attrs.rot_2 / qlen) * 128 + 128;
-				rot[3] = (attrs.rot_3 / qlen) * 128 + 128;
-
-				scales[0] = Math.exp(attrs.scale_0);
-				scales[1] = Math.exp(attrs.scale_1);
-				scales[2] = Math.exp(attrs.scale_2);
-			} else {
-				scales[0] = 0.01;
-				scales[1] = 0.01;
-				scales[2] = 0.01;
-
-				rot[0] = 255;
-				rot[1] = 0;
-				rot[2] = 0;
-				rot[3] = 0;
-			}
-
-			position[0] = attrs.x;
-			position[1] = attrs.y;
-			position[2] = attrs.z;
-
-			if (types["f_dc_0"]) {
-				const SH_C0 = 0.28209479177387814;
-				rgba[0] = (0.5 + SH_C0 * attrs.f_dc_0) * 255;
-				rgba[1] = (0.5 + SH_C0 * attrs.f_dc_1) * 255;
-				rgba[2] = (0.5 + SH_C0 * attrs.f_dc_2) * 255;
-			} else {
-				rgba[0] = attrs.red;
-				rgba[1] = attrs.green;
-				rgba[2] = attrs.blue;
-			}
-			if (types["opacity"]) {
-				rgba[3] = (1 / (1 + Math.exp(-attrs.opacity))) * 255;
-			} else {
-				rgba[3] = 255;
-			}
-		}
-		console.timeEnd("build buffer");
-		return buffer;
-	}
+	// processPlyBuffer extracted entirely to separate standalone script
 
 	const throttledSort = () => {
 		if (!sortRunning) {
@@ -597,13 +497,7 @@ function createWorker(self) {
 
 	let sortRunning;
 	self.onmessage = (e) => {
-		if (e.data.ply) {
-			vertexCount = 0;
-			runSort(viewProj);
-			buffer = processPlyBuffer(e.data.ply);
-			vertexCount = Math.floor(buffer.byteLength / rowLength);
-			postMessage({ buffer: buffer });
-		} else if (e.data.buffer) {
+		if (e.data.buffer) {
 			buffer = e.data.buffer;
 			vertexCount = e.data.vertexCount;
 		} else if (e.data.vertexCount) {
@@ -706,25 +600,40 @@ precision mediump float;
   }
 `;
 
-let defaultViewMatrix = [
+/*let defaultViewMatrix = [
 	0.47, 0.04, 0.88, 0, -0.11, 0.99, 0.02, 0, -0.88, -0.11, 0.47, 0, 0.07,
 	0.03, 6.55, 1,
+];*/
+let defaultViewMatrix = [
+	1, 0, 0, 0,
+	0, 1, 0, 0,
+	0, 0, 1, 0,
+	0, 0, 0, 1
 ];
+
 let viewMatrix = defaultViewMatrix;
 let activeDownsample = null
 async function main() {
 	let carousel = true;
+
 	const params = new URLSearchParams(location.search);
 	try {
 		viewMatrix = JSON.parse(decodeURIComponent(location.hash.slice(1)));
 		carousel = false;
-	} catch (err) {}
-	const url = new URL(
+	} catch (err) { }
+	/*const url = new URL(
 		// "nike.splat",
 		// location.href,
 		params.get("url") || "train.splat",
 		"https://huggingface.co/cakewalk/splat-data/resolve/main/",
-	);
+	);*/
+	// Assuming 'train.splat' is the file you want to fetch from your local server
+	const localFilePath = 'http://localhost:8000/splats/casa_lysekrone2/model_00000.splat'; // URL to local file
+
+
+	// Use the local file path or a URL parameter (if provided)
+	const url = new URL(params.get("url") || localFilePath);
+
 	const req = await fetch(url, {
 		mode: "cors", // no-cors, *cors, same-origin
 		credentials: "omit", // include, *same-origin, omit
@@ -732,6 +641,7 @@ async function main() {
 	console.log(req);
 	if (req.status != 200)
 		throw new Error(req.status + " Unable to load " + req.url);
+
 
 	const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
 	const reader = req.body.getReader();
@@ -872,38 +782,26 @@ async function main() {
 	let lastData;
 
 	worker.onmessage = (e) => {
-		if (e.data.buffer) {
-			splatData = new Uint8Array(e.data.buffer);
-			const blob = new Blob([splatData.buffer], {
-				type: "application/octet-stream",
-			});
-			const link = document.createElement("a");
-			link.download = "model.splat";
-			link.href = URL.createObjectURL(blob);
-			document.body.appendChild(link);
-			link.click();
-		} else {
-			let { covA, covB, center, color, viewProj } = e.data;
-			lastData = e.data;
+		let { covA, covB, center, color, viewProj } = e.data;
+		lastData = e.data;
 
-			activeDownsample = downsample
+		activeDownsample = downsample
 
-			lastProj = viewProj;
-			vertexCount = center.length / 3;
+		lastProj = viewProj;
+		vertexCount = center.length / 3;
 
-			gl.bindBuffer(gl.ARRAY_BUFFER, centerBuffer);
-			gl.bufferData(gl.ARRAY_BUFFER, center, gl.DYNAMIC_DRAW);
+		gl.bindBuffer(gl.ARRAY_BUFFER, centerBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, center, gl.DYNAMIC_DRAW);
 
-			gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
-			gl.bufferData(gl.ARRAY_BUFFER, color, gl.DYNAMIC_DRAW);
+		gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, color, gl.DYNAMIC_DRAW);
 
-			gl.bindBuffer(gl.ARRAY_BUFFER, covABuffer);
-			gl.bufferData(gl.ARRAY_BUFFER, covA, gl.DYNAMIC_DRAW);
+		gl.bindBuffer(gl.ARRAY_BUFFER, covABuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, covA, gl.DYNAMIC_DRAW);
 
-			gl.bindBuffer(gl.ARRAY_BUFFER, covBBuffer);
-			gl.bufferData(gl.ARRAY_BUFFER, covB, gl.DYNAMIC_DRAW);
-			//console.log("update");
-		}
+		gl.bindBuffer(gl.ARRAY_BUFFER, covBBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, covB, gl.DYNAMIC_DRAW);
+		//console.log("update");
 	};
 
 	let activeKeys = [];
@@ -912,9 +810,25 @@ async function main() {
 		// if (document.activeElement != document.body) return;
 		//carousel = false;
 		if (!activeKeys.includes(e.key)) activeKeys.push(e.key);
-		if (/\d/.test(e.key)) {
-			carousel = false;
-			viewMatrix = getViewMatrix(cameras[parseInt(e.key)]);
+		if (/\d/.test(e.key) && !(e.ctrlKey)) {
+			if (e.key == "0") {
+				defaultViewMatrix = [
+					1, 0, 0, 0,
+					0, 1, 0, 0,
+					0, 0, 1, 0,
+					0, 0, 0, 1
+				];
+				viewMatrix = defaultViewMatrix;
+			} else if (e.key == "9") {
+				defaultViewMatrix = [-0.97, 0, -0.22, 0, 0, 1, 0, 0, 0.22, 0, -0.97, 0, -0.43, -0.01, 15.28, 1];
+				viewMatrix = defaultViewMatrix;
+			}
+
+			else {
+				//carousel = false;
+				viewMatrix = getViewMatrix(cameras[parseInt(e.key)]);
+				defaultViewMatrix = viewMatrix;
+			}
 		}
 		if (e.key == "v") {
 			location.hash =
@@ -943,14 +857,15 @@ async function main() {
 				e.deltaMode == 1
 					? lineHeight
 					: e.deltaMode == 2
-					? innerHeight
-					: 1;
+						? innerHeight
+						: 1;
 			let inv = invert4(viewMatrix);
+			let speed = globalMovementSpeed;
 			if (e.shiftKey) {
 				inv = translate4(
 					inv,
-					(e.deltaX * scale) / innerWidth,
-					(e.deltaY * scale) / innerHeight,
+					(e.deltaX * scale * speed) / innerWidth,
+					(e.deltaY * scale * speed) / innerHeight,
 					0,
 				);
 			} else if (e.ctrlKey || e.metaKey) {
@@ -961,14 +876,14 @@ async function main() {
 					inv,
 					0,
 					0,
-					(-10 * (e.deltaY * scale)) / innerHeight,
+					(-10 * (e.deltaY * scale * speed)) / innerHeight,
 				);
 				inv[13] = preY;
 			} else {
 				let d = 4;
 				inv = translate4(inv, 0, 0, d);
-				inv = rotate4(inv, -(e.deltaX * scale) / innerWidth, 0, 1, 0);
-				inv = rotate4(inv, (e.deltaY * scale) / innerHeight, 1, 0, 0);
+				inv = rotate4(inv, -(e.deltaX * scale * speed) / innerWidth, 0, 1, 0);
+				inv = rotate4(inv, (e.deltaY * scale * speed) / innerHeight, 1, 0, 0);
 				inv = translate4(inv, 0, 0, -d);
 			}
 
@@ -995,10 +910,11 @@ async function main() {
 
 	canvas.addEventListener("mousemove", (e) => {
 		e.preventDefault();
+		let speed = globalMovementSpeed;
 		if (down == 1) {
 			let inv = invert4(viewMatrix);
-			let dx = (5 * (e.clientX - startX)) / innerWidth;
-			let dy = (5 * (e.clientY - startY)) / innerHeight;
+			let dx = (5 * (e.clientX - startX) * speed) / innerWidth;
+			let dy = (5 * (e.clientY - startY) * speed) / innerHeight;
 			let d = 4;
 
 			inv = translate4(inv, 0, 0, d);
@@ -1018,9 +934,9 @@ async function main() {
 			let preY = inv[13];
 			inv = translate4(
 				inv,
-				(-10 * (e.clientX - startX)) / innerWidth,
+				(-10 * (e.clientX - startX) * speed) / innerWidth,
 				0,
-				(10 * (e.clientY - startY)) / innerHeight,
+				(10 * (e.clientY - startY) * speed) / innerHeight,
 			);
 			inv[13] = preY;
 			viewMatrix = invert4(inv);
@@ -1048,7 +964,7 @@ async function main() {
 				startY = e.touches[0].clientY;
 				down = 1;
 			} else if (e.touches.length === 2) {
-				// console.log('beep')
+				//console.log('beep')
 				carousel = false;
 				startX = e.touches[0].clientX;
 				altX = e.touches[1].clientX;
@@ -1063,10 +979,11 @@ async function main() {
 		"touchmove",
 		(e) => {
 			e.preventDefault();
+			let speed = globalMovementSpeed;
 			if (e.touches.length === 1 && down) {
 				let inv = invert4(viewMatrix);
-				let dx = (4 * (e.touches[0].clientX - startX)) / innerWidth;
-				let dy = (4 * (e.touches[0].clientY - startY)) / innerHeight;
+				let dx = (4 * (e.touches[0].clientX - startX) * speed) / innerWidth;
+				let dy = (4 * (e.touches[0].clientY - startY) * speed) / innerHeight;
 
 				let d = 4;
 				inv = translate4(inv, 0, 0, d);
@@ -1081,7 +998,7 @@ async function main() {
 				startX = e.touches[0].clientX;
 				startY = e.touches[0].clientY;
 			} else if (e.touches.length === 2) {
-				// alert('beep')
+				//alert('beep')
 				const dtheta =
 					Math.atan2(startY - altY, startX - altX) -
 					Math.atan2(
@@ -1106,12 +1023,12 @@ async function main() {
 					2;
 				let inv = invert4(viewMatrix);
 				// inv = translate4(inv,  0, 0, d);
-				inv = rotate4(inv, dtheta, 0, 0, 1);
+				inv = rotate4(inv, dtheta * speed, 0, 0, 1);
 
-				inv = translate4(inv, -dx / innerWidth, -dy / innerHeight, 0);
+				inv = translate4(inv, (-dx * speed) / innerWidth, (-dy * speed) / innerHeight, 0);
 
 				let preY = inv[13];
-				inv = translate4(inv, 0, 0, 3 * (1 - dscale));
+				inv = translate4(inv, 0, 0, 3 * speed * (1 - dscale));
 				inv[13] = preY;
 
 				viewMatrix = invert4(inv);
@@ -1142,7 +1059,7 @@ async function main() {
 	let avgFps = 0;
 	let start = 0;
 
-//add camera noise
+	//add camera noise
 	// Adapted from p5.js implementation
 	let noisePermutations;
 	function generateNoisePermutations() {
@@ -1184,14 +1101,21 @@ async function main() {
 	let noiseOffsetX = 0;
 	let noiseOffsetY = 1000;  // Start with different initial offsets
 	let noiseOffsetZ = 2000;
-	
+
 	function getNoise(offset) {
-	  return (noise(offset) - 0.0) * 2; // Normalizing to be between -1 and 1
+		return (noise(offset) - 0.0) * 2; // Normalizing to be between -1 and 1
 	}
+	// Damping state variables
+	let smTx = 0, smTy = 0, smTz = 0;
+	let smRy = 0, smRz = 0, smRx = 0;
+	let smOx = 0, smOy = 0;
+
+	let globalMovementSpeed = 1.0;
+	let lastModelLoadTime = 0;
 
 	const frame = (now) => {
 		let inv = invert4(viewMatrix);
-	
+
 		// Apply noise for constant camera shake
 		noiseOffsetX += 0.1;
 		noiseOffsetY += 0.1;
@@ -1201,65 +1125,87 @@ async function main() {
 		const noiseValueZ = getNoise(noiseOffsetZ);
 		inv = translate4(inv, noiseValueX * 0.0003, noiseValueY * 0.0003, noiseValueZ * 0.00001);
 
-		if (activeKeys.includes("ArrowUp")) {
-			if (activeKeys.includes("Shift")) {
-				inv = translate4(inv, 0, -0.001, 0);
-			} else {
-				let preY = inv[13];
-				inv = translate4(inv, 0, 0, 0.001);
-				inv[13] = preY;
-			}
-		}
-		if (activeKeys.includes("ArrowDown")) {
-			if (activeKeys.includes("Shift")) {
-				inv = translate4(inv, 0, 0.001, 0);
-			} else {
-				let preY = inv[13];
-				inv = translate4(inv, 0, 0, -0.001);
-				inv[13] = preY;
-			}
-		}
-		if (activeKeys.includes("ArrowLeft"))
-			inv = translate4(inv, -0.001, 0, 0); //org -0.03
-		//
-		if (activeKeys.includes("ArrowRight"))
-			inv = translate4(inv, 0.001, 0, 0);
-		// inv = rotate4(inv, 0.01, 0, 1, 0);
-		if (activeKeys.includes("a")) inv = rotate4(inv, -0.001, 0, 1, 0);//org minus en null
-		if (activeKeys.includes("d")) inv = rotate4(inv, 0.001, 0, 1, 0);
-		if (activeKeys.includes("q")) inv = rotate4(inv, 0.001, 0, 0, 1);
-		if (activeKeys.includes("e")) inv = rotate4(inv, -0.001, 0, 0, 1);
-		if (activeKeys.includes("w")) inv = rotate4(inv, 0.0005, 1, 0, 0);
-		if (activeKeys.includes("s")) inv = rotate4(inv, -0.0005, 1, 0, 0);
+		let targetTx = 0, targetTy = 0, targetTz = 0;
+		let targetRy = 0, targetRz = 0, targetRx = 0;
+		let targetOx = 0, targetOy = 0; // Orbit
 
-		if (["j", "k", "l", "i"].some((k) => activeKeys.includes(k))) {
+		if ((activeKeys.includes("ArrowUp")) || (activeKeys.includes("å"))) {
+			if (activeKeys.includes("Shift")) targetTy = -0.1;
+			else targetTz = 0.1;
+		}
+		if ((activeKeys.includes("ArrowDown")) || (activeKeys.includes("æ"))) {
+			if (activeKeys.includes("Shift")) targetTy = 0.1;
+			else targetTz = -0.1;
+		}
+		if ((activeKeys.includes("ArrowLeft")) || (activeKeys.includes("ø"))) targetTx = -0.1;
+		if ((activeKeys.includes("ArrowRight")) || (activeKeys.includes("@"))) targetTx = 0.1;
+
+		if (activeKeys.includes("a")) targetRy = -0.01;
+		if (activeKeys.includes("d")) targetRy = 0.01;
+		if (activeKeys.includes("q")) targetRz = 0.01;
+		if (activeKeys.includes("e")) targetRz = -0.01;
+		if (activeKeys.includes("w")) targetRx = 0.01;
+		if (activeKeys.includes("s")) targetRx = -0.01;
+
+		if (activeKeys.includes("j")) targetOy = -0.01;
+		if (activeKeys.includes("l")) targetOy = 0.01;
+		if (activeKeys.includes("i")) targetOx = 0.01;
+		if (activeKeys.includes("k")) targetOx = -0.01;
+
+		// Rebalance specific arrow-key translation to be somewhat slower relative to rotation, and apply global speed modifier
+		targetTx *= globalMovementSpeed * 0.4;
+		targetTy *= globalMovementSpeed * 0.4;
+		targetTz *= globalMovementSpeed * 0.4;
+
+		targetRy *= globalMovementSpeed * 1.2;
+		targetRz *= globalMovementSpeed * 1.2;
+		targetRx *= globalMovementSpeed * 1.2;
+
+		targetOx *= globalMovementSpeed;
+		targetOy *= globalMovementSpeed;
+
+		if (targetTx || targetTy || targetTz || targetRy || targetRz || targetRx || targetOx || targetOy) {
+			carousel = false;
+		}
+
+		// Apply damping
+		const lerpFactor = 0.04; // Made much lower for cinematic, buttery smooth start and stop ramping
+		smTx += (targetTx - smTx) * lerpFactor;
+		smTy += (targetTy - smTy) * lerpFactor;
+		smTz += (targetTz - smTz) * lerpFactor;
+		smRy += (targetRy - smRy) * lerpFactor;
+		smRz += (targetRz - smRz) * lerpFactor;
+		smRx += (targetRx - smRx) * lerpFactor;
+		smOx += (targetOx - smOx) * lerpFactor;
+		smOy += (targetOy - smOy) * lerpFactor;
+
+		// Apply smoothed translations
+		if (Math.abs(smTy) > 0.00001) {
+			inv = translate4(inv, 0, smTy, 0);
+		}
+		if (Math.abs(smTz) > 0.00001) {
+			let preY = inv[13];
+			inv = translate4(inv, 0, 0, smTz);
+			inv[13] = preY; // Keep height constant when moving back/forward
+		}
+		if (Math.abs(smTx) > 0.00001) {
+			inv = translate4(inv, smTx, 0, 0);
+		}
+
+		// Apply smoothed rotations
+		if (Math.abs(smRy) > 0.000001) inv = rotate4(inv, smRy, 0, 1, 0);
+		if (Math.abs(smRz) > 0.000001) inv = rotate4(inv, smRz, 0, 0, 1);
+		if (Math.abs(smRx) > 0.000001) inv = rotate4(inv, smRx, 1, 0, 0);
+
+		// Apply smoothed orbit
+		if (Math.abs(smOx) > 0.00001 || Math.abs(smOy) > 0.00001) {
 			let d = 4;
 			inv = translate4(inv, 0, 0, d);
-			inv = rotate4(
-				inv,
-				activeKeys.includes("j")
-					? -0.05
-					: activeKeys.includes("l")
-					? 0.05
-					: 0,
-				0,
-				1,
-				0,
-			);
-			inv = rotate4(
-				inv,
-				activeKeys.includes("i")
-					? 0.05
-					: activeKeys.includes("k")
-					? -0.05
-					: 0,
-				1,
-				0,
-				0,
-			);
+			if (Math.abs(smOy) > 0.00001) inv = rotate4(inv, smOy, 0, 1, 0);
+			if (Math.abs(smOx) > 0.00001) inv = rotate4(inv, smOx, 1, 0, 0);
 			inv = translate4(inv, 0, 0, -d);
 		}
-		
+
 		// inv[13] = preY;
 		viewMatrix = invert4(inv);
 
@@ -1274,35 +1220,56 @@ async function main() {
 			viewMatrix = invert4(inv);
 		}
 		*/
-		if (needUpdate) {
-			// Your logic for handling the updated model or resized object
-			needUpdate = false; // Reset the flag
-
-		}
 		if (carousel) {
-
 			let inv = invert4(defaultViewMatrix);
-//			let inv = invert4(viewMatrix);
-	
-			// Apply noise for constant camera shake
-			noiseOffsetX += 0.1;
-			noiseOffsetY += 0.1;
-			noiseOffsetZ += 0.1;
-			const noiseValueX = getNoise(noiseOffsetX);
-			const noiseValueY = getNoise(noiseOffsetY);
-			const noiseValueZ = getNoise(noiseOffsetZ);
-			inv = translate4(inv, noiseValueX * 0.0003, noiseValueY * 0.0003, noiseValueZ * 0.00001);
-	
-			const t = (Date.now() - start) % 50000 / 15000; // Reset t every 50000 ms (50 seconds)
-			const scaledT = 2 * Math.PI * t / 10; // Scale t to span a full circle in 50 seconds
-		
-			inv = translate4(inv, 2.5 * Math.sin(scaledT), 0, 6 * (1 - Math.cos(scaledT)));
-			//inv = translate4(inv, 2.5 * t, 0, 6 * (1 - Math.cos(t)));
-			inv = rotate4(inv, -1.2 * scaledT, 0, 1, 0);
-		
+			//let inv = invert4(viewMatrix);
+
+			const elapsedTime = (Date.now() - start) / 5000;
+			const radius = 6; // Radius of the circular path
+			const angle = elapsedTime * 0.3; // This controls the speed of the orbit
+
+			// Calculating the camera's position on the circular path
+			const x = radius * Math.sin(angle);
+			const z = radius * Math.cos(angle);
+
+			// Reset the camera to the default position
+			inv = translate4(inv, -x, 0, -z);
+
+			// Calculate the rotation angle to face the center
+			const rotationAngle = angle + Math.PI / 2 - 1.5;
+
+			// Apply the rotation
+			inv = rotate4(inv, rotationAngle, 0, 1, 0);
+
 			viewMatrix = invert4(inv);
 		}
 
+
+		/*
+				if (carousel) {
+		
+					let inv = invert4(defaultViewMatrix);
+		//			let inv = invert4(viewMatrix);
+			
+					// Apply noise for constant camera shake
+					noiseOffsetX += 0.1;
+					noiseOffsetY += 0.1;
+					noiseOffsetZ += 0.1;
+					const noiseValueX = getNoise(noiseOffsetX);
+					const noiseValueY = getNoise(noiseOffsetY);
+					const noiseValueZ = getNoise(noiseOffsetZ);
+					inv = translate4(inv, noiseValueX * 0.0003, noiseValueY * 0.0003, noiseValueZ * 0.00001);
+			
+					const t = (Date.now() - start) % 50000 / 15000; // Reset t every 50000 ms (50 seconds)
+					const scaledT = 2 * Math.PI * t / 10; // Scale t to span a full circle in 50 seconds
+				
+					inv = translate4(inv, 2.5 * Math.sin(scaledT), 0, 6 * (1 - Math.cos(scaledT)));
+					//inv = translate4(inv, 2.5 * t, 0, 6 * (1 - Math.cos(t)));
+					inv = rotate4(inv, -1.2 * scaledT, 0, 1, 0);
+				
+					viewMatrix = invert4(inv);
+				}
+		*/
 		if (activeKeys.includes(" ")) {
 			jumpDelta = Math.min(1, jumpDelta + 0.05);
 		} else {
@@ -1338,6 +1305,30 @@ async function main() {
 			document.getElementById("progress").style.display = "none";
 		}
 		fps.innerText = Math.round(avgFps) + " fps";
+
+		// Frame-synced model scale controls
+		if (activeKeys.includes('m') || activeKeys.includes('n')) {
+			const scaleMultiplier = 1 + (0.01 * globalMovementSpeed);
+			if (activeKeys.includes('m')) globalScaleFactor *= scaleMultiplier; 
+			if (activeKeys.includes('n')) globalScaleFactor /= scaleMultiplier; 
+			worker.postMessage({ type: "setGlobalScaleFactor", value: globalScaleFactor });
+			needUpdate = true;
+		}
+
+		// Frame-synced model loading controls (throttled to max 5 skips per second)
+		if (activeKeys.includes('g') || activeKeys.includes('h')) {
+			if (now - lastModelLoadTime > 200) {
+				let splatJump = Math.max(1, Math.round(5 * globalMovementSpeed));
+				if (activeKeys.includes('h')) {
+					modelIndex += splatJump;
+				} else if (activeKeys.includes('g')) {
+					modelIndex = Math.max(0, modelIndex - splatJump);
+				}
+				loadSplatModel();
+				lastModelLoadTime = now;
+			}
+		}
+
 		lastFrame = now;
 		requestAnimationFrame(frame);
 	};
@@ -1361,20 +1352,12 @@ async function main() {
 			const splatData = new Uint8Array(arrayBuffer);
 			console.log("Loaded", Math.floor(splatData.length / rowLength));
 
-			if (
-				splatData[0] == 112 &&
-				splatData[1] == 108 &&
-				splatData[2] == 121 &&
-				splatData[3] == 10
-			) {
-				// ply file magic header means it should be handled differently
-				worker.postMessage({ ply: splatData.buffer });
-			} else {
+			if (Math.floor(splatData.length / rowLength) < vertexLimit) {
 				worker.postMessage({
 					buffer: splatData.buffer,
 					vertexCount: Math.floor(splatData.length / rowLength),
 				});
-			}
+			} else { console.log("stopped") }
 		}
 	};
 
@@ -1389,13 +1372,13 @@ async function main() {
 			fr.readAsArrayBuffer(file);
 		}
 	};
-	
+
 
 	window.addEventListener("hashchange", (e) => {
 		try {
 			viewMatrix = JSON.parse(decodeURIComponent(location.hash.slice(1)));
 			carousel = false;
-		} catch (err) {}
+		} catch (err) { }
 	});
 
 	const preventDefault = (e) => {
@@ -1414,60 +1397,160 @@ async function main() {
 	//load next with key h
 	let modelIndex = 0;
 
+	//	const directoryPath = './splats/a_three_dimensional_image_of_a_smooth_sundown_in_metal_alloy_pocket_sized_sculpture_terraced_garden_aureate_CGI_asset_luxurious_stunning_ebon_stage/';
+	//	const filenamePrefix = 'model_';  // The common prefix for all files
+	//	const filenameExtension = '.splat';
 
-	const directoryPath = './vision/';
-	const filenamePrefix = 'vision';  // The common prefix for all files
-	const filenameExtension = '.model';
+	//	const directoryPath = './splats/an_ethereal_projection_of_eggshell_barriers_transcendent_clarity_divine_ink_black_backdrop_butter_smooth/';
+	//	const filenamePrefix = 'model_';  // The common prefix for all files
+	//	const filenameExtension = '.splat';
 
-	window.addEventListener('keydown', function(event) {
-		if (event.key === 'h') {
-			// Create the complete file name using the current index
-			const fileName = `${directoryPath}${filenamePrefix}${String(modelIndex).padStart(5, '0')}${filenameExtension}`;
+	//	const directoryPath = './splats/xilitla/';
+	//	const filenamePrefix = 'xilitla_';  // The common prefix for all files
+	//	const filenameExtension = '.splat';
 
-			// Load model as arrayBuffer and call processModel
-			fetch(fileName)
-				.then(response => {
-					if (!response.ok) {
-						throw new Error('File not found');
-						modelIndex = 0;
-					}
-					return response.arrayBuffer();
-				})
-				.then(buffer => {
-					processModel(buffer, fileName);
-				})
-				.catch(error => {
-					console.error("An error occurred: ", error);
-					modelIndex = 0;  // Reset the counter if file not found
-				});
-			
-			// Increment the index for the next iteration
-			modelIndex++;
-			needUpdate = true;
+	//	const directoryPath = './splats/casa_lysekrone2/';
+	//	const filenamePrefix = 'casalys2_';  // The common prefix for all files
+	//	const filenameExtension = '.splat';
+
+	//const directoryPath = './splats/jungleruinwalk2/';
+	//const filenamePrefix = 'jungleruinwalk_';  // The common prefix for all files
+	//const filenameExtension = '.splat';
+
+	//const directoryPath = './splats/anartistic_splat/';
+	//const filenamePrefix = 'anartistic_';  // The common prefix for all files
+	//const filenameExtension = '.splat';
+
+	let directoryPath = './splats/casa_lysekrone2/';
+	const filenamePrefix = 'model_'; // Constant prefix
+	const filenameExtension = '.splat';
+
+	let maxModelIndex = Infinity;
+
+	function loadSplatModel() {
+		if (modelIndex > maxModelIndex) {
+			modelIndex = maxModelIndex;
+			return; // Stop requesting if we already proved it's the ceiling
+		}
+
+		const fileName = `${directoryPath}${filenamePrefix}${String(modelIndex).padStart(5, '0')}${filenameExtension}`;
+
+		fetch(fileName)
+			.then(response => {
+				if (!response.ok) {
+					// We jumped into the void! Cap the max index mathematically to backtrack.
+					maxModelIndex = Math.max(0, modelIndex - 1);
+					modelIndex = maxModelIndex;
+					loadSplatModel(); // Try loading the new confirmed ceiling
+					throw new Error('Splat boundary reached');
+				}
+				return response.arrayBuffer();
+			})
+			.then(buffer => {
+				processModel(buffer, fileName);
+			})
+			.catch(error => {
+				// Hide the intentional boundary discovery error to keep console clean
+				if (error.message !== 'Splat boundary reached') {
+					console.error("Splat Loading Error: ", error);
+				}
+			});
+		needUpdate = true;
+	}
+
+	// Event listener for keypress
+	document.addEventListener('keydown', (event) => {
+		if (event.altKey && event.code.startsWith('Digit')) {
+			const folderIndex = parseInt(event.code.replace('Digit', ''), 10) - 1; // Convert key to array index
+			if (folderIndex >= 0 && folderIndex < splatFolders.length) {
+				directoryPath = splatFolders[folderIndex];
+				modelIndex = 0;
+				maxModelIndex = Infinity; // Reset ceiling rule for new folder
+				loadSplatModel();
+			}
 		}
 	});
+
+	// Keydown listeners for g/h moved dynamically into frame loop!
+
 	//controll splat size
-	
-	window.addEventListener('keydown', function(event) {
-		if (event.key === 'm') {
-		  	globalScaleFactor *= 1.1; // Increase size by 10%
-		  	// Send the globalScaleFactor to the worker
-			worker.postMessage({ type: "setGlobalScaleFactor", value: globalScaleFactor });
-			needUpdate = true; // Set the flag for an immediate update
-		} else if (event.key === 'n') {
-			globalScaleFactor *= 0.9; // Decrease size by 10%
-			// Send the globalScaleFactor to the worker
-			worker.postMessage({ type: "setGlobalScaleFactor", value: globalScaleFactor });
-			needUpdate = true; // Set the flag for an immediate update
+	// Keydown listeners for m/n moved dynamically into frame loop!
+
+	// ==========================================
+	// Video Recording with MediaRecorder API
+	// ==========================================
+	let mediaRecorder;
+	let recordedChunks = [];
+
+	window.addEventListener('keydown', function (event) {
+		if (event.key === 'r') {
+			const canvas = document.getElementById('canvas');
+			const messageDiv = document.getElementById('message');
+
+			if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+				console.log('Started recording...');
+				// Capture at 60 Frames Per Second
+				const stream = canvas.captureStream(60);
+
+				// Check for mp4 support (e.g. Safari), fallback to webm (e.g. Chrome)
+				let options = { mimeType: 'video/webm; codecs=vp9' };
+				if (MediaRecorder.isTypeSupported('video/mp4')) {
+					options = { mimeType: 'video/mp4' };
+				}
+
+				try {
+					mediaRecorder = new MediaRecorder(stream, options);
+				} catch (e) {
+					console.error('MediaRecorder error:', e);
+					return;
+				}
+
+				recordedChunks = [];
+
+				mediaRecorder.ondataavailable = function (e) {
+					if (e.data.size > 0) {
+						recordedChunks.push(e.data);
+					}
+				};
+
+				mediaRecorder.onstop = function () {
+					console.log('Stopped recording, downloading file...');
+					const blob = new Blob(recordedChunks, {
+						type: options.mimeType
+					});
+					const url = URL.createObjectURL(blob);
+					const a = document.createElement('a');
+					a.style.display = 'none';
+					a.href = url;
+
+					// Name the file properly based on format
+					const extension = options.mimeType === 'video/mp4' ? 'mp4' : 'webm';
+					a.download = `3d_splat_recording.${extension}`;
+
+					document.body.appendChild(a);
+					a.click();
+
+					setTimeout(() => {
+						document.body.removeChild(a);
+						URL.revokeObjectURL(url);
+					}, 100);
+				};
+
+				mediaRecorder.start();
+				if (messageDiv) messageDiv.innerText = '🔴 Recording... Press "r" to stop';
+			} else {
+				// Stop the recording
+				mediaRecorder.stop();
+				if (messageDiv) messageDiv.innerText = '';
+			}
 		}
 	});
-
 
 
 	window.addEventListener('resize', (e) => {
 		const canvas = document.getElementById("canvas");
-    	canvas.width = innerWidth / activeDownsample;
-    	canvas.height = innerHeight / activeDownsample;
+		canvas.width = innerWidth / activeDownsample;
+		canvas.height = innerHeight / activeDownsample;
 	})
 
 	let bytesRead = 0;
@@ -1495,6 +1578,71 @@ async function main() {
 			buffer: splatData.buffer,
 			vertexCount: Math.floor(bytesRead / rowLength),
 		});
+	// ==========================================
+	// Dynamic Folder Loading
+	// ==========================================
+	const folderBtn = document.getElementById('folder-menu-btn');
+	const folderOverlay = document.getElementById('folder-overlay');
+
+	if (folderBtn && folderOverlay) {
+		folderBtn.addEventListener('click', () => {
+			folderOverlay.classList.toggle('hidden');
+		});
+
+		fetch('./splats/')
+			.then(res => res.text())
+			.then(html => {
+				const parser = new DOMParser();
+				const doc = parser.parseFromString(html, 'text/html');
+				// http.server returns simple <a> tags for directories
+				const links = Array.from(doc.querySelectorAll('a'));
+
+				let folders = links
+					.map(a => a.getAttribute('href'))
+					.filter(href => href && href !== '../' && href.endsWith('/'));
+
+				if (folders.length > 0) {
+					splatFolders.length = 0; // Clear the hardcoded ones
+					const folderList = document.getElementById('folder-list');
+					folderList.innerHTML = '';
+
+					folders.forEach((folder) => {
+						const fullPath = `./splats/${folder}`;
+						splatFolders.push(fullPath);
+
+						const item = document.createElement('div');
+						item.className = 'folder-item';
+						item.innerText = folder.replace('/', '');
+
+						item.addEventListener('click', () => {
+							directoryPath = fullPath;
+							console.log('Switched to folder via menu:', directoryPath);
+							modelIndex = 0;
+							maxModelIndex = Infinity; // Reset ceiling rule for new folder
+							loadSplatModel();
+							folderOverlay.classList.add('hidden');
+						});
+
+						folderList.appendChild(item);
+					});
+				} else {
+					document.getElementById('folder-list').innerHTML = '<div style="font-size:0.8rem; color:#aaa; font-style:italic;">No folders found</div>';
+				}
+			})
+			.catch(err => {
+				console.error("Failed to load folder structure:", err);
+				document.getElementById('folder-list').innerHTML = '<div style="font-size:0.8rem; color:#f55; font-style:italic;">Error loading folders from server</div>';
+			});
+	}
+
+	const speedBtns = document.querySelectorAll('.speed-btn');
+	speedBtns.forEach(btn => {
+		btn.addEventListener('click', (e) => {
+			speedBtns.forEach(b => b.classList.remove('active'));
+			e.target.classList.add('active');
+			globalMovementSpeed = parseFloat(e.target.getAttribute('data-speed'));
+		});
+	});
 }
 
 main().catch((err) => {

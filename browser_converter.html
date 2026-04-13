@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+
+<head>
+	<title>PLY to SPLAT Converter</title>
+	<style>
+		body {
+			background-color: #0f0f14;
+			color: white;
+			font-family: sans-serif;
+			padding: 40px;
+		}
+
+		button {
+			padding: 10px 20px;
+			font-size: 16px;
+			cursor: pointer;
+		}
+	</style>
+</head>
+
+<body>
+	<h1>PLY to SPLAT Batch Converter</h1>
+	<p>This script replicates the "F" key functionality previously found in main.js.</p>
+	<p>To use: Host this file on your local server. It will fetch from `./point_cloud/pointcloud_X.ply` sequentially and
+		download `.splat` files.</p>
+	<button id="start-btn">Start Auto-Conversion ("F" key)</button>
+	<div id="log"></div>
+
+	<script>
+		// ===================================
+		// PLY TO SPLAT PARSING LOGIC
+		// ===================================
+		function processPlyBuffer(inputBuffer) {
+			const ubuf = new Uint8Array(inputBuffer);
+			const header = new TextDecoder().decode(ubuf.slice(0, 1024 * 10));
+			const header_end = "end_header\n";
+			const header_end_index = header.indexOf(header_end);
+			if (header_end_index < 0) throw new Error("Unable to read .ply file header");
+
+			const vertexCount = parseInt(/element vertex (\d+)\n/.exec(header)[1]);
+			let row_offset = 0, offsets = {}, types = {};
+			const TYPE_MAP = {
+				double: "getFloat64", int: "getInt32", uint: "getUint32", float: "getFloat32",
+				short: "getInt16", ushort: "getUint16", uchar: "getUint8",
+			};
+
+			for (let prop of header.slice(0, header_end_index).split("\n").filter((k) => k.startsWith("property "))) {
+				const [p, type, name] = prop.split(" ");
+				const arrayType = TYPE_MAP[type] || "getInt8";
+				types[name] = arrayType;
+				offsets[name] = row_offset;
+				row_offset += parseInt(arrayType.replace(/[^\d]/g, "")) / 8;
+			}
+
+			let dataView = new DataView(inputBuffer, header_end_index + header_end.length);
+			let row = 0;
+			const attrs = new Proxy({}, {
+				get(target, prop) {
+					if (!types[prop]) throw new Error(prop + " not found");
+					return dataView[types[prop]](row * row_offset + offsets[prop], true);
+				},
+			});
+
+			let sizeList = new Float32Array(vertexCount);
+			let sizeIndex = new Uint32Array(vertexCount);
+			for (row = 0; row < vertexCount; row++) {
+				sizeIndex[row] = row;
+				if (!types["scale_0"]) continue;
+				const size = Math.exp(attrs.scale_0) * Math.exp(attrs.scale_1) * Math.exp(attrs.scale_2);
+				const opacity = 1 / (1 + Math.exp(-attrs.opacity));
+				sizeList[row] = size * opacity;
+			}
+
+			sizeIndex.sort((b, a) => sizeList[a] - sizeList[b]);
+
+			const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
+			const buffer = new ArrayBuffer(rowLength * vertexCount);
+
+			for (let j = 0; j < vertexCount; j++) {
+				row = sizeIndex[j];
+				const position = new Float32Array(buffer, j * rowLength, 3);
+				const scales = new Float32Array(buffer, j * rowLength + 4 * 3, 3);
+				const rgba = new Uint8ClampedArray(buffer, j * rowLength + 4 * 3 + 4 * 3, 4);
+				const rot = new Uint8ClampedArray(buffer, j * rowLength + 4 * 3 + 4 * 3 + 4, 4);
+
+				if (types["scale_0"]) {
+					const qlen = Math.sqrt(attrs.rot_0 ** 2 + attrs.rot_1 ** 2 + attrs.rot_2 ** 2 + attrs.rot_3 ** 2);
+					rot[0] = (attrs.rot_0 / qlen) * 128 + 128;
+					rot[1] = (attrs.rot_1 / qlen) * 128 + 128;
+					rot[2] = (attrs.rot_2 / qlen) * 128 + 128;
+					rot[3] = (attrs.rot_3 / qlen) * 128 + 128;
+					scales[0] = Math.exp(attrs.scale_0);
+					scales[1] = Math.exp(attrs.scale_1);
+					scales[2] = Math.exp(attrs.scale_2);
+				} else {
+					scales[0] = 0.01; scales[1] = 0.01; scales[2] = 0.01;
+					rot[0] = 255; rot[1] = 0; rot[2] = 0; rot[3] = 0;
+				}
+
+				position[0] = attrs.x;
+				position[1] = attrs.y;
+				position[2] = attrs.z;
+
+				if (types["f_dc_0"]) {
+					const SH_C0 = 0.28209479177387814;
+					rgba[0] = (0.5 + SH_C0 * attrs.f_dc_0) * 255;
+					rgba[1] = (0.5 + SH_C0 * attrs.f_dc_1) * 255;
+					rgba[2] = (0.5 + SH_C0 * attrs.f_dc_2) * 255;
+				} else {
+					rgba[0] = attrs.red; rgba[1] = attrs.green; rgba[2] = attrs.blue;
+				}
+				if (types["opacity"]) {
+					rgba[3] = (1 / (1 + Math.exp(-attrs.opacity))) * 255;
+				} else {
+					rgba[3] = 255;
+				}
+			}
+			return buffer;
+		}
+
+		// ===================================
+		// SEQUENTIAL FETCH AND DOWNLOAD
+		// ===================================
+		let amodelIndex = 0;
+		let loadingInterval = null;
+		const delay = 500;
+		const logDiv = document.getElementById('log');
+		let pointCloudFolders = []; // Will hold ['iteration_10', 'iteration_200', ...]
+
+		function log(msg) {
+			const p = document.createElement('div');
+			p.innerText = msg;
+			logDiv.appendChild(p);
+		}
+
+		async function initializeFolders() {
+			try {
+				const response = await fetch('./point_cloud/');
+				if (!response.ok) throw new Error("Could not read directory");
+				const html = await response.text();
+				
+				const parser = new DOMParser();
+				const doc = parser.parseFromString(html, 'text/html');
+				const links = Array.from(doc.querySelectorAll('a'));
+				
+				// Extract subfolders starting with iteration_
+				pointCloudFolders = links
+					.map(a => a.getAttribute('href'))
+					.filter(href => href && href.startsWith('iteration_'))
+					.map(href => href.replace(/\/$/, ''));
+					
+				// Sort numerically
+				pointCloudFolders.sort((a, b) => {
+					const numA = parseInt(a.replace('iteration_', '')) || 0;
+					const numB = parseInt(b.replace('iteration_', '')) || 0;
+					return numA - numB;
+				});
+				
+				log(`Found ${pointCloudFolders.length} iteration folders! Ready to convert.`);
+			} catch (error) {
+				log(`Error mapping directories: ${error.message} - Ensure you are running python -m http.server`);
+			}
+		}
+
+		function loadModelAtIndex(index) {
+			if (index >= pointCloudFolders.length) {
+				log(`All ${pointCloudFolders.length} folders processed completely!`);
+				clearInterval(loadingInterval);
+				loadingInterval = null;
+				amodelIndex = 0;
+				return;
+			}
+
+			const folder = pointCloudFolders[index];
+			const afileName = `./point_cloud/${folder}/point_cloud.ply`;
+			log(`Fetching ${afileName}...`);
+
+			fetch(afileName)
+				.then(response => {
+					if (!response.ok) throw new Error('File not found');
+					return response.arrayBuffer();
+				})
+				.then(buffer => {
+					log(`Converting ${folder} to .splat...`);
+					const splatBuffer = processPlyBuffer(buffer);
+
+					// Trigger Download mapped perfectly to a 5-digit squential format!
+					const blob = new Blob([splatBuffer], { type: "application/octet-stream" });
+					const link = document.createElement("a");
+					link.download = `model_${String(index).padStart(5, '0')}.splat`;
+					link.href = URL.createObjectURL(blob);
+					document.body.appendChild(link);
+					link.click();
+					setTimeout(() => document.body.removeChild(link), 100);
+
+					amodelIndex++;
+				})
+				.catch(error => {
+					log(`Error on ${folder}: Skipping...`);
+					amodelIndex++; 
+				});
+		}
+
+		function toggleConversion() {
+			if (loadingInterval !== null) {
+				clearInterval(loadingInterval);
+				loadingInterval = null;
+				log("Paused conversion.");
+				return;
+			}
+			
+			if (pointCloudFolders.length === 0) {
+				log("Folders not loaded yet. Retrying...");
+				initializeFolders().then(toggleConversion);
+				return;
+			}
+
+			log("Starting sequential conversion across iteration folders...");
+			loadingInterval = setInterval(() => {
+				loadModelAtIndex(amodelIndex);
+			}, delay);
+		}
+
+		// Pre-fetch the folder tree
+		initializeFolders();
+
+		document.getElementById('start-btn').addEventListener('click', toggleConversion);
+
+		window.addEventListener('keydown', (event) => {
+			if (event.key === 'f') {
+				toggleConversion();
+			}
+		});
+
+	</script>
+</body>
+
+</html>
