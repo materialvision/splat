@@ -1,10 +1,9 @@
 let needUpdate = false; // Flag to check if an immediate update is needed
 let globalScaleFactor = 1.0; // The scale factor you want to send
-let vertexLimit = 13000000; //prev limit 130000
-let downsampleLimit = 1000000; //prev limit 500000
+let vertexLimit = 130000;
 // Define the folder paths
 const splatFolders = [
-	'./splats/tue/',
+	'./splats/aliconvert/',
 	'./splats/an_ethereal_projection_of_eggshell_barriers_transcendent_clarity_divine_ink_black_backdrop_butter_smooth/',
 	'./splats/xilitla/',
 	'./splats/casa_lysekrone2/',
@@ -12,7 +11,8 @@ const splatFolders = [
 	'./splats/city3/',
 	'./splats/palm/',
 	'./splats/circ2/',
-	'./splats/1/',
+	'./splats/an_artistic_rendition_of_a_sun_in_bronze_real_life_tiny_replica_patio_sunlit_three_dimensional_element_opulent_bewitching_charcoal_setting/',
+	'./splats/tue/',
 ];
 let cameras = [
 	{
@@ -480,7 +480,152 @@ function createWorker(self) {
 		// console.timeEnd("sort");
 	};
 
-	// processPlyBuffer extracted entirely to separate standalone script
+	function processPlyBuffer(inputBuffer) {
+		const ubuf = new Uint8Array(inputBuffer);
+		// 10KB ought to be enough for a header...
+		const header = new TextDecoder().decode(ubuf.slice(0, 1024 * 10));
+		const header_end = "end_header\n";
+		const header_end_index = header.indexOf(header_end);
+		if (header_end_index < 0)
+			throw new Error("Unable to read .ply file header");
+		const vertexCount = parseInt(/element vertex (\d+)\n/.exec(header)[1]);
+		console.log("Vertex Count", vertexCount);
+		let row_offset = 0,
+			offsets = {},
+			types = {};
+		const TYPE_MAP = {
+			double: "getFloat64",
+			int: "getInt32",
+			uint: "getUint32",
+			float: "getFloat32",
+			short: "getInt16",
+			ushort: "getUint16",
+			uchar: "getUint8",
+		};
+		for (let prop of header
+			.slice(0, header_end_index)
+			.split("\n")
+			.filter((k) => k.startsWith("property "))) {
+			const [p, type, name] = prop.split(" ");
+			const arrayType = TYPE_MAP[type] || "getInt8";
+			types[name] = arrayType;
+			offsets[name] = row_offset;
+			row_offset += parseInt(arrayType.replace(/[^\d]/g, "")) / 8;
+		}
+		console.log("Bytes per row", row_offset, types, offsets);
+
+		let dataView = new DataView(
+			inputBuffer,
+			header_end_index + header_end.length,
+		);
+		let row = 0;
+		const attrs = new Proxy(
+			{},
+			{
+				get(target, prop) {
+					if (!types[prop]) throw new Error(prop + " not found");
+					return dataView[types[prop]](
+						row * row_offset + offsets[prop],
+						true,
+					);
+				},
+			},
+		);
+
+		console.time("calculate importance");
+		let sizeList = new Float32Array(vertexCount);
+		let sizeIndex = new Uint32Array(vertexCount);
+		for (row = 0; row < vertexCount; row++) {
+			sizeIndex[row] = row;
+			if (!types["scale_0"]) continue;
+			const size =
+				Math.exp(attrs.scale_0) *
+				Math.exp(attrs.scale_1) *
+				Math.exp(attrs.scale_2);
+			const opacity = 1 / (1 + Math.exp(-attrs.opacity));
+			sizeList[row] = size * opacity;
+		}
+		console.timeEnd("calculate importance");
+
+		console.time("sort");
+		sizeIndex.sort((b, a) => sizeList[a] - sizeList[b]);
+		console.timeEnd("sort");
+
+		// 6*4 + 4 + 4 = 8*4
+		// XYZ - Position (Float32)
+		// XYZ - Scale (Float32)
+		// RGBA - colors (uint8)
+		// IJKL - quaternion/rot (uint8)
+		const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
+		const buffer = new ArrayBuffer(rowLength * vertexCount);
+
+		console.time("build buffer");
+		for (let j = 0; j < vertexCount; j++) {
+			row = sizeIndex[j];
+
+			const position = new Float32Array(buffer, j * rowLength, 3);
+			const scales = new Float32Array(buffer, j * rowLength + 4 * 3, 3);
+			const rgba = new Uint8ClampedArray(
+				buffer,
+				j * rowLength + 4 * 3 + 4 * 3,
+				4,
+			);
+			const rot = new Uint8ClampedArray(
+				buffer,
+				j * rowLength + 4 * 3 + 4 * 3 + 4,
+				4,
+			);
+
+			if (types["scale_0"]) {
+				const qlen = Math.sqrt(
+					attrs.rot_0 ** 2 +
+					attrs.rot_1 ** 2 +
+					attrs.rot_2 ** 2 +
+					attrs.rot_3 ** 2,
+				);
+
+				rot[0] = (attrs.rot_0 / qlen) * 128 + 128;
+				rot[1] = (attrs.rot_1 / qlen) * 128 + 128;
+				rot[2] = (attrs.rot_2 / qlen) * 128 + 128;
+				rot[3] = (attrs.rot_3 / qlen) * 128 + 128;
+
+				scales[0] = Math.exp(attrs.scale_0);
+				scales[1] = Math.exp(attrs.scale_1);
+				scales[2] = Math.exp(attrs.scale_2);
+			} else {
+				scales[0] = 0.01;
+				scales[1] = 0.01;
+				scales[2] = 0.01;
+
+				rot[0] = 255;
+				rot[1] = 0;
+				rot[2] = 0;
+				rot[3] = 0;
+			}
+
+			position[0] = attrs.x;
+			position[1] = attrs.y;
+			position[2] = attrs.z;
+
+			if (types["f_dc_0"]) {
+				const SH_C0 = 0.28209479177387814;
+				rgba[0] = (0.5 + SH_C0 * attrs.f_dc_0) * 255;
+				rgba[1] = (0.5 + SH_C0 * attrs.f_dc_1) * 255;
+				rgba[2] = (0.5 + SH_C0 * attrs.f_dc_2) * 255;
+			} else {
+				rgba[0] = attrs.red;
+				rgba[1] = attrs.green;
+				rgba[2] = attrs.blue;
+			}
+			if (types["opacity"]) {
+				rgba[3] = (1 / (1 + Math.exp(-attrs.opacity))) * 255;
+			} else {
+				rgba[3] = 255;
+			}
+		}
+		console.timeEnd("build buffer");
+		return buffer;
+	}
 
 	const throttledSort = () => {
 		if (!sortRunning) {
@@ -498,7 +643,13 @@ function createWorker(self) {
 
 	let sortRunning;
 	self.onmessage = (e) => {
-		if (e.data.buffer) {
+		if (e.data.ply) {
+			vertexCount = 0;
+			runSort(viewProj);
+			buffer = processPlyBuffer(e.data.ply);
+			vertexCount = Math.floor(buffer.byteLength / rowLength);
+			postMessage({ buffer: buffer });
+		} else if (e.data.buffer) {
 			buffer = e.data.buffer;
 			vertexCount = e.data.vertexCount;
 		} else if (e.data.vertexCount) {
@@ -629,7 +780,7 @@ async function main() {
 		"https://huggingface.co/cakewalk/splat-data/resolve/main/",
 	);*/
 	// Assuming 'train.splat' is the file you want to fetch from your local server
-	const localFilePath = 'http://localhost:8000/splats/1/model_00000.splat'; // URL to local file
+	const localFilePath = 'http://localhost:8000/splats/aliconvert/model_00000.splat'; // URL to local file
 
 
 	// Use the local file path or a URL parameter (if provided)
@@ -649,7 +800,7 @@ async function main() {
 	let splatData = new Uint8Array(req.headers.get("content-length"));
 
 	const downsample =
-		splatData.length / rowLength > downsampleLimit ? 1 : 1 / devicePixelRatio;
+		splatData.length / rowLength > 500000 ? 1 : 1 / devicePixelRatio;
 	// const downsample = 1 / devicePixelRatio;
 	// const downsample = 1;
 	console.log(splatData.length / rowLength, downsample);
@@ -783,26 +934,38 @@ async function main() {
 	let lastData;
 
 	worker.onmessage = (e) => {
-		let { covA, covB, center, color, viewProj } = e.data;
-		lastData = e.data;
+		if (e.data.buffer) {
+			splatData = new Uint8Array(e.data.buffer);
+			const blob = new Blob([splatData.buffer], {
+				type: "application/octet-stream",
+			});
+			const link = document.createElement("a");
+			link.download = "model.splat";
+			link.href = URL.createObjectURL(blob);
+			document.body.appendChild(link);
+			link.click();
+		} else {
+			let { covA, covB, center, color, viewProj } = e.data;
+			lastData = e.data;
 
-		activeDownsample = downsample
+			activeDownsample = downsample
 
-		lastProj = viewProj;
-		vertexCount = center.length / 3;
+			lastProj = viewProj;
+			vertexCount = center.length / 3;
 
-		gl.bindBuffer(gl.ARRAY_BUFFER, centerBuffer);
-		gl.bufferData(gl.ARRAY_BUFFER, center, gl.DYNAMIC_DRAW);
+			gl.bindBuffer(gl.ARRAY_BUFFER, centerBuffer);
+			gl.bufferData(gl.ARRAY_BUFFER, center, gl.DYNAMIC_DRAW);
 
-		gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
-		gl.bufferData(gl.ARRAY_BUFFER, color, gl.DYNAMIC_DRAW);
+			gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+			gl.bufferData(gl.ARRAY_BUFFER, color, gl.DYNAMIC_DRAW);
 
-		gl.bindBuffer(gl.ARRAY_BUFFER, covABuffer);
-		gl.bufferData(gl.ARRAY_BUFFER, covA, gl.DYNAMIC_DRAW);
+			gl.bindBuffer(gl.ARRAY_BUFFER, covABuffer);
+			gl.bufferData(gl.ARRAY_BUFFER, covA, gl.DYNAMIC_DRAW);
 
-		gl.bindBuffer(gl.ARRAY_BUFFER, covBBuffer);
-		gl.bufferData(gl.ARRAY_BUFFER, covB, gl.DYNAMIC_DRAW);
-		//console.log("update");
+			gl.bindBuffer(gl.ARRAY_BUFFER, covBBuffer);
+			gl.bufferData(gl.ARRAY_BUFFER, covB, gl.DYNAMIC_DRAW);
+			//console.log("update");
+		}
 	};
 
 	let activeKeys = [];
@@ -861,12 +1024,11 @@ async function main() {
 						? innerHeight
 						: 1;
 			let inv = invert4(viewMatrix);
-			let speed = globalMovementSpeed;
 			if (e.shiftKey) {
 				inv = translate4(
 					inv,
-					(e.deltaX * scale * speed) / innerWidth,
-					(e.deltaY * scale * speed) / innerHeight,
+					(e.deltaX * scale) / innerWidth,
+					(e.deltaY * scale) / innerHeight,
 					0,
 				);
 			} else if (e.ctrlKey || e.metaKey) {
@@ -877,14 +1039,14 @@ async function main() {
 					inv,
 					0,
 					0,
-					(-10 * (e.deltaY * scale * speed)) / innerHeight,
+					(-10 * (e.deltaY * scale)) / innerHeight,
 				);
 				inv[13] = preY;
 			} else {
 				let d = 4;
 				inv = translate4(inv, 0, 0, d);
-				inv = rotate4(inv, -(e.deltaX * scale * speed) / innerWidth, 0, 1, 0);
-				inv = rotate4(inv, (e.deltaY * scale * speed) / innerHeight, 1, 0, 0);
+				inv = rotate4(inv, -(e.deltaX * scale) / innerWidth, 0, 1, 0);
+				inv = rotate4(inv, (e.deltaY * scale) / innerHeight, 1, 0, 0);
 				inv = translate4(inv, 0, 0, -d);
 			}
 
@@ -911,11 +1073,10 @@ async function main() {
 
 	canvas.addEventListener("mousemove", (e) => {
 		e.preventDefault();
-		let speed = globalMovementSpeed;
 		if (down == 1) {
 			let inv = invert4(viewMatrix);
-			let dx = (5 * (e.clientX - startX) * speed) / innerWidth;
-			let dy = (5 * (e.clientY - startY) * speed) / innerHeight;
+			let dx = (5 * (e.clientX - startX)) / innerWidth;
+			let dy = (5 * (e.clientY - startY)) / innerHeight;
 			let d = 4;
 
 			inv = translate4(inv, 0, 0, d);
@@ -935,9 +1096,9 @@ async function main() {
 			let preY = inv[13];
 			inv = translate4(
 				inv,
-				(-10 * (e.clientX - startX) * speed) / innerWidth,
+				(-10 * (e.clientX - startX)) / innerWidth,
 				0,
-				(10 * (e.clientY - startY) * speed) / innerHeight,
+				(10 * (e.clientY - startY)) / innerHeight,
 			);
 			inv[13] = preY;
 			viewMatrix = invert4(inv);
@@ -980,11 +1141,10 @@ async function main() {
 		"touchmove",
 		(e) => {
 			e.preventDefault();
-			let speed = globalMovementSpeed;
 			if (e.touches.length === 1 && down) {
 				let inv = invert4(viewMatrix);
-				let dx = (4 * (e.touches[0].clientX - startX) * speed) / innerWidth;
-				let dy = (4 * (e.touches[0].clientY - startY) * speed) / innerHeight;
+				let dx = (4 * (e.touches[0].clientX - startX)) / innerWidth;
+				let dy = (4 * (e.touches[0].clientY - startY)) / innerHeight;
 
 				let d = 4;
 				inv = translate4(inv, 0, 0, d);
@@ -1024,12 +1184,12 @@ async function main() {
 					2;
 				let inv = invert4(viewMatrix);
 				// inv = translate4(inv,  0, 0, d);
-				inv = rotate4(inv, dtheta * speed, 0, 0, 1);
+				inv = rotate4(inv, dtheta, 0, 0, 1);
 
-				inv = translate4(inv, (-dx * speed) / innerWidth, (-dy * speed) / innerHeight, 0);
+				inv = translate4(inv, -dx / innerWidth, -dy / innerHeight, 0);
 
 				let preY = inv[13];
-				inv = translate4(inv, 0, 0, 3 * speed * (1 - dscale));
+				inv = translate4(inv, 0, 0, 3 * (1 - dscale));
 				inv[13] = preY;
 
 				viewMatrix = invert4(inv);
@@ -1106,13 +1266,6 @@ async function main() {
 	function getNoise(offset) {
 		return (noise(offset) - 0.0) * 2; // Normalizing to be between -1 and 1
 	}
-	// Damping state variables
-	let smTx = 0, smTy = 0, smTz = 0;
-	let smRy = 0, smRz = 0, smRx = 0;
-	let smOx = 0, smOy = 0;
-
-	let globalMovementSpeed = 1.0;
-	let lastModelLoadTime = 0;
 
 	const frame = (now) => {
 		let inv = invert4(viewMatrix);
@@ -1126,84 +1279,63 @@ async function main() {
 		const noiseValueZ = getNoise(noiseOffsetZ);
 		inv = translate4(inv, noiseValueX * 0.0003, noiseValueY * 0.0003, noiseValueZ * 0.00001);
 
-		let targetTx = 0, targetTy = 0, targetTz = 0;
-		let targetRy = 0, targetRz = 0, targetRx = 0;
-		let targetOx = 0, targetOy = 0; // Orbit
-
 		if ((activeKeys.includes("ArrowUp")) || (activeKeys.includes("å"))) {
-			if (activeKeys.includes("Shift")) targetTy = -0.1;
-			else targetTz = 0.1;
+			if (activeKeys.includes("Shift")) {
+				qe
+				inv = translate4(inv, 0, -0.1, 0);
+			} else {
+				let preY = inv[13];
+				inv = translate4(inv, 0, 0, 0.1);
+				inv[13] = preY;
+			}
 		}
 		if ((activeKeys.includes("ArrowDown")) || (activeKeys.includes("æ"))) {
-			if (activeKeys.includes("Shift")) targetTy = 0.1;
-			else targetTz = -0.1;
+			if (activeKeys.includes("Shift")) {
+				inv = translate4(inv, 0, 0.1, 0);
+			} else {
+				let preY = inv[13];
+				inv = translate4(inv, 0, 0, -0.1);
+				inv[13] = preY;
+			}
 		}
-		if ((activeKeys.includes("ArrowLeft")) || (activeKeys.includes("ø"))) targetTx = -0.1;
-		if ((activeKeys.includes("ArrowRight")) || (activeKeys.includes("@"))) targetTx = 0.1;
+		if ((activeKeys.includes("ArrowLeft")) || (activeKeys.includes("ø")))
+			inv = translate4(inv, -0.1, 0, 0); //org -0.03
+		//
+		if ((activeKeys.includes("ArrowRight")) || (activeKeys.includes("@")))
+			inv = translate4(inv, 0.1, 0, 0);
+		// inv = rotate4(inv, 0.01, 0, 1, 0);
+		if (activeKeys.includes("a")) inv = rotate4(inv, -0.001, 0, 1, 0);//org minus en null
+		if (activeKeys.includes("d")) inv = rotate4(inv, 0.001, 0, 1, 0);
+		if (activeKeys.includes("q")) inv = rotate4(inv, 0.001, 0, 0, 1);
+		if (activeKeys.includes("e")) inv = rotate4(inv, -0.001, 0, 0, 1);
+		if (activeKeys.includes("w")) inv = rotate4(inv, 0.0005, 1, 0, 0);
+		if (activeKeys.includes("s")) inv = rotate4(inv, -0.0005, 1, 0, 0);
 
-		if (activeKeys.includes("a")) targetRy = -0.01;
-		if (activeKeys.includes("d")) targetRy = 0.01;
-		if (activeKeys.includes("q")) targetRz = 0.01;
-		if (activeKeys.includes("e")) targetRz = -0.01;
-		if (activeKeys.includes("w")) targetRx = 0.01;
-		if (activeKeys.includes("s")) targetRx = -0.01;
-
-		if (activeKeys.includes("j")) targetOy = -0.01;
-		if (activeKeys.includes("l")) targetOy = 0.01;
-		if (activeKeys.includes("i")) targetOx = 0.01;
-		if (activeKeys.includes("k")) targetOx = -0.01;
-
-		// Rebalance specific arrow-key translation to be somewhat slower relative to rotation, and apply global speed modifier
-		targetTx *= globalMovementSpeed * 0.4;
-		targetTy *= globalMovementSpeed * 0.4;
-		targetTz *= globalMovementSpeed * 0.4;
-
-		targetRy *= globalMovementSpeed * 1.2;
-		targetRz *= globalMovementSpeed * 1.2;
-		targetRx *= globalMovementSpeed * 1.2;
-
-		targetOx *= globalMovementSpeed;
-		targetOy *= globalMovementSpeed;
-
-		if (targetTx || targetTy || targetTz || targetRy || targetRz || targetRx || targetOx || targetOy) {
-			carousel = false;
-		}
-
-		// Apply damping
-		const lerpFactor = 0.04; // Made much lower for cinematic, buttery smooth start and stop ramping
-		smTx += (targetTx - smTx) * lerpFactor;
-		smTy += (targetTy - smTy) * lerpFactor;
-		smTz += (targetTz - smTz) * lerpFactor;
-		smRy += (targetRy - smRy) * lerpFactor;
-		smRz += (targetRz - smRz) * lerpFactor;
-		smRx += (targetRx - smRx) * lerpFactor;
-		smOx += (targetOx - smOx) * lerpFactor;
-		smOy += (targetOy - smOy) * lerpFactor;
-
-		// Apply smoothed translations
-		if (Math.abs(smTy) > 0.00001) {
-			inv = translate4(inv, 0, smTy, 0);
-		}
-		if (Math.abs(smTz) > 0.00001) {
-			let preY = inv[13];
-			inv = translate4(inv, 0, 0, smTz);
-			inv[13] = preY; // Keep height constant when moving back/forward
-		}
-		if (Math.abs(smTx) > 0.00001) {
-			inv = translate4(inv, smTx, 0, 0);
-		}
-
-		// Apply smoothed rotations
-		if (Math.abs(smRy) > 0.000001) inv = rotate4(inv, smRy, 0, 1, 0);
-		if (Math.abs(smRz) > 0.000001) inv = rotate4(inv, smRz, 0, 0, 1);
-		if (Math.abs(smRx) > 0.000001) inv = rotate4(inv, smRx, 1, 0, 0);
-
-		// Apply smoothed orbit
-		if (Math.abs(smOx) > 0.00001 || Math.abs(smOy) > 0.00001) {
+		if (["j", "k", "l", "i"].some((k) => activeKeys.includes(k))) {
 			let d = 4;
 			inv = translate4(inv, 0, 0, d);
-			if (Math.abs(smOy) > 0.00001) inv = rotate4(inv, smOy, 0, 1, 0);
-			if (Math.abs(smOx) > 0.00001) inv = rotate4(inv, smOx, 1, 0, 0);
+			inv = rotate4(
+				inv,
+				activeKeys.includes("j")
+					? -0.05
+					: activeKeys.includes("l")
+						? 0.05
+						: 0,
+				0,
+				1,
+				0,
+			);
+			inv = rotate4(
+				inv,
+				activeKeys.includes("i")
+					? 0.05
+					: activeKeys.includes("k")
+						? -0.05
+						: 0,
+				1,
+				0,
+				0,
+			);
 			inv = translate4(inv, 0, 0, -d);
 		}
 
@@ -1306,30 +1438,6 @@ async function main() {
 			document.getElementById("progress").style.display = "none";
 		}
 		fps.innerText = Math.round(avgFps) + " fps";
-
-		// Frame-synced model scale controls
-		if (activeKeys.includes('m') || activeKeys.includes('n')) {
-			const scaleMultiplier = 1 + (0.01 * globalMovementSpeed);
-			if (activeKeys.includes('m')) globalScaleFactor *= scaleMultiplier;
-			if (activeKeys.includes('n')) globalScaleFactor /= scaleMultiplier;
-			worker.postMessage({ type: "setGlobalScaleFactor", value: globalScaleFactor });
-			needUpdate = true;
-		}
-
-		// Frame-synced model loading controls (throttled to max 5 skips per second)
-		if (activeKeys.includes('g') || activeKeys.includes('h')) {
-			if (now - lastModelLoadTime > 200) {
-				let splatJump = Math.max(1, Math.round(5 * globalMovementSpeed));
-				if (activeKeys.includes('h')) {
-					modelIndex += splatJump;
-				} else if (activeKeys.includes('g')) {
-					modelIndex = Math.max(0, modelIndex - splatJump);
-				}
-				loadSplatModel();
-				lastModelLoadTime = now;
-			}
-		}
-
 		lastFrame = now;
 		requestAnimationFrame(frame);
 	};
@@ -1353,12 +1461,22 @@ async function main() {
 			const splatData = new Uint8Array(arrayBuffer);
 			console.log("Loaded", Math.floor(splatData.length / rowLength));
 
-			if (Math.floor(splatData.length / rowLength) < vertexLimit) {
-				worker.postMessage({
-					buffer: splatData.buffer,
-					vertexCount: Math.floor(splatData.length / rowLength),
-				});
-			} else { console.log("stopped") }
+			if (
+				splatData[0] == 112 &&
+				splatData[1] == 108 &&
+				splatData[2] == 121 &&
+				splatData[3] == 10
+			) {
+				// ply file magic header means it should be handled differently
+				worker.postMessage({ ply: splatData.buffer });
+			} else {
+				if (Math.floor(splatData.length / rowLength) < vertexLimit) {
+					worker.postMessage({
+						buffer: splatData.buffer,
+						vertexCount: Math.floor(splatData.length / rowLength),
+					});
+				} else { console.log("stopped") }
+			}
 		}
 	};
 
@@ -1422,130 +1540,135 @@ async function main() {
 	//const filenamePrefix = 'anartistic_';  // The common prefix for all files
 	//const filenameExtension = '.splat';
 
-	let directoryPath = './splats/1/';
+	let directoryPath = './splats/aliconvert/';
 	const filenamePrefix = 'model_'; // Constant prefix
 	const filenameExtension = '.splat';
 
-	let maxModelIndex = Infinity;
-
-	function loadSplatModel() {
-		if (modelIndex > maxModelIndex) {
-			modelIndex = maxModelIndex;
-			return; // Stop requesting if we already proved it's the ceiling
+	// Event listener for keypress
+	document.addEventListener('keydown', (event) => {
+		if (event.shiftKey && event.key >= '1' && event.key <= '9') {
+			const folderIndex = parseInt(event.key, 10) - 1; // Convert key to array index
+			if (folderIndex < splatFolders.length) {
+				directoryPath = splatFolders[folderIndex];
+				console.log(directoryPath);
+				modelIndex = 0;
+			}
 		}
+	});
 
-		const fileName = `${directoryPath}${filenamePrefix}${String(modelIndex).padStart(5, '0')}${filenameExtension}`;
+	window.addEventListener('keydown', function (event) {
+		if (event.key === 'h') {
+			// Create the complete file name using the current index
+			const fileName = `${directoryPath}${filenamePrefix}${String(modelIndex).padStart(5, '0')}${filenameExtension}`;
+			console.log(fileName);
+			// Load model as arrayBuffer and call processModel
+			fetch(fileName)
+				.then(response => {
+					if (!response.ok) {
+						throw new Error('File not found');
+						//modelIndex = 0;
+					}
+					return response.arrayBuffer();
+				})
+				.then(buffer => {
+					processModel(buffer, fileName);
+				})
+				.catch(error => {
+					console.error("An error occurred: ", error);
+					//modelIndex = 0;  // Reset the counter if file not found
+				});
 
-		fetch(fileName)
+			// Increment the index for the next iteration
+			modelIndex++;
+			needUpdate = true;
+		}
+	});
+	window.addEventListener('keydown', function (event) {
+		if (event.key === 'g') {
+			// Create the complete file name using the current index
+			const fileName = `${directoryPath}${filenamePrefix}${String(modelIndex).padStart(5, '0')}${filenameExtension}`;
+
+			// Load model as arrayBuffer and call processModel
+			fetch(fileName)
+				.then(response => {
+					if (!response.ok) {
+						throw new Error('File not found');
+						//modelIndex = 0;
+					}
+					return response.arrayBuffer();
+				})
+				.then(buffer => {
+					processModel(buffer, fileName);
+				})
+				.catch(error => {
+					console.error("An error occurred: ", error);
+					//modelIndex = 0;  // Reset the counter if file not found
+				});
+
+			// Increment the index for the next iteration
+			modelIndex--;
+			needUpdate = true;
+		}
+	});
+
+	let amodelIndex = 0;
+	let loadingInterval = null; // Hold the interval ID for clearing it later
+	const delay = 500; // Delay between loading files in milliseconds
+
+	const adirectoryPath = './point_cloud/';
+	const afilenamePrefix = 'pointcloud_'; // The common prefix for all files
+	const afilenameExtension = '.ply';
+
+	function loadModelAtIndex(index) {
+		const afileName = `${adirectoryPath}${afilenamePrefix}${String(index).padStart(5, '0')}${afilenameExtension}`;
+
+		fetch(afileName)
 			.then(response => {
 				if (!response.ok) {
-					// We jumped into the void! Cap the max index mathematically to backtrack.
-					maxModelIndex = Math.max(0, modelIndex - 1);
-					modelIndex = maxModelIndex;
-					loadSplatModel(); // Try loading the new confirmed ceiling
-					throw new Error('Splat boundary reached');
+					throw new Error('File not found');
 				}
 				return response.arrayBuffer();
 			})
 			.then(buffer => {
-				processModel(buffer, fileName);
+				processModel(buffer, afileName);
+				amodelIndex++; // Move to the next index if successful
 			})
 			.catch(error => {
-				// Hide the intentional boundary discovery error to keep console clean
-				if (error.message !== 'Splat boundary reached') {
-					console.error("Splat Loading Error: ", error);
-				}
+				console.error("An error occurred: ", error.message);
+				clearInterval(loadingInterval); // Stop the loop if file not found
+				amodelIndex = 0; // Reset the index if you want to restart the process next time
 			});
-		needUpdate = true;
 	}
 
-	// Event listener for keypress
-	document.addEventListener('keydown', (event) => {
-		if (event.altKey && event.code.startsWith('Digit')) {
-			const folderIndex = parseInt(event.code.replace('Digit', ''), 10) - 1; // Convert key to array index
-			if (folderIndex >= 0 && folderIndex < splatFolders.length) {
-				directoryPath = splatFolders[folderIndex];
-				modelIndex = 0;
-				maxModelIndex = Infinity; // Reset ceiling rule for new folder
-				loadSplatModel();
+	window.addEventListener('keydown', function (event) {
+		if (event.key === 'f') {
+			// Check if an interval is already set, to prevent multiple loops
+			if (loadingInterval !== null) {
+				clearInterval(loadingInterval);
 			}
+
+			// Start a new interval
+			loadingInterval = setInterval(() => {
+				loadModelAtIndex(amodelIndex);
+			}, delay);
 		}
 	});
-
-	// Keydown listeners for g/h moved dynamically into frame loop!
 
 	//controll splat size
-	// Keydown listeners for m/n moved dynamically into frame loop!
-
-	// ==========================================
-	// Video Recording with MediaRecorder API
-	// ==========================================
-	let mediaRecorder;
-	let recordedChunks = [];
-
 	window.addEventListener('keydown', function (event) {
-		if (event.key === 'r') {
-			const canvas = document.getElementById('canvas');
-			const messageDiv = document.getElementById('message');
-
-			if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-				console.log('Started recording...');
-				// Capture at 60 Frames Per Second
-				const stream = canvas.captureStream(60);
-
-				// Check for mp4 support (e.g. Safari), fallback to webm (e.g. Chrome)
-				let options = { mimeType: 'video/webm; codecs=vp9' };
-				if (MediaRecorder.isTypeSupported('video/mp4')) {
-					options = { mimeType: 'video/mp4' };
-				}
-
-				try {
-					mediaRecorder = new MediaRecorder(stream, options);
-				} catch (e) {
-					console.error('MediaRecorder error:', e);
-					return;
-				}
-
-				recordedChunks = [];
-
-				mediaRecorder.ondataavailable = function (e) {
-					if (e.data.size > 0) {
-						recordedChunks.push(e.data);
-					}
-				};
-
-				mediaRecorder.onstop = function () {
-					console.log('Stopped recording, downloading file...');
-					const blob = new Blob(recordedChunks, {
-						type: options.mimeType
-					});
-					const url = URL.createObjectURL(blob);
-					const a = document.createElement('a');
-					a.style.display = 'none';
-					a.href = url;
-
-					// Name the file properly based on format
-					const extension = options.mimeType === 'video/mp4' ? 'mp4' : 'webm';
-					a.download = `3d_splat_recording.${extension}`;
-
-					document.body.appendChild(a);
-					a.click();
-
-					setTimeout(() => {
-						document.body.removeChild(a);
-						URL.revokeObjectURL(url);
-					}, 100);
-				};
-
-				mediaRecorder.start();
-				if (messageDiv) messageDiv.innerText = '🔴 Recording... Press "r" to stop';
-			} else {
-				// Stop the recording
-				mediaRecorder.stop();
-				if (messageDiv) messageDiv.innerText = '';
-			}
+		if (event.key === 'm') {
+			globalScaleFactor *= 1.01; // Increase size by 10%
+			// Send the globalScaleFactor to the worker
+			worker.postMessage({ type: "setGlobalScaleFactor", value: globalScaleFactor });
+			needUpdate = true; // Set the flag for an immediate update
+		} else if (event.key === 'n') {
+			globalScaleFactor *= 0.99; // Decrease size by 10%
+			// Send the globalScaleFactor to the worker
+			worker.postMessage({ type: "setGlobalScaleFactor", value: globalScaleFactor });
+			needUpdate = true; // Set the flag for an immediate update
 		}
 	});
+
 
 
 	window.addEventListener('resize', (e) => {
@@ -1579,71 +1702,6 @@ async function main() {
 			buffer: splatData.buffer,
 			vertexCount: Math.floor(bytesRead / rowLength),
 		});
-	// ==========================================
-	// Dynamic Folder Loading
-	// ==========================================
-	const folderBtn = document.getElementById('folder-menu-btn');
-	const folderOverlay = document.getElementById('folder-overlay');
-
-	if (folderBtn && folderOverlay) {
-		folderBtn.addEventListener('click', () => {
-			folderOverlay.classList.toggle('hidden');
-		});
-
-		fetch('./splats/')
-			.then(res => res.text())
-			.then(html => {
-				const parser = new DOMParser();
-				const doc = parser.parseFromString(html, 'text/html');
-				// http.server returns simple <a> tags for directories
-				const links = Array.from(doc.querySelectorAll('a'));
-
-				let folders = links
-					.map(a => a.getAttribute('href'))
-					.filter(href => href && href !== '../' && href.endsWith('/'));
-
-				if (folders.length > 0) {
-					splatFolders.length = 0; // Clear the hardcoded ones
-					const folderList = document.getElementById('folder-list');
-					folderList.innerHTML = '';
-
-					folders.forEach((folder) => {
-						const fullPath = `./splats/${folder}`;
-						splatFolders.push(fullPath);
-
-						const item = document.createElement('div');
-						item.className = 'folder-item';
-						item.innerText = folder.replace('/', '');
-
-						item.addEventListener('click', () => {
-							directoryPath = fullPath;
-							console.log('Switched to folder via menu:', directoryPath);
-							modelIndex = 0;
-							maxModelIndex = Infinity; // Reset ceiling rule for new folder
-							loadSplatModel();
-							folderOverlay.classList.add('hidden');
-						});
-
-						folderList.appendChild(item);
-					});
-				} else {
-					document.getElementById('folder-list').innerHTML = '<div style="font-size:0.8rem; color:#aaa; font-style:italic;">No folders found</div>';
-				}
-			})
-			.catch(err => {
-				console.error("Failed to load folder structure:", err);
-				document.getElementById('folder-list').innerHTML = '<div style="font-size:0.8rem; color:#f55; font-style:italic;">Error loading folders from server</div>';
-			});
-	}
-
-	const speedBtns = document.querySelectorAll('.speed-btn');
-	speedBtns.forEach(btn => {
-		btn.addEventListener('click', (e) => {
-			speedBtns.forEach(b => b.classList.remove('active'));
-			e.target.classList.add('active');
-			globalMovementSpeed = parseFloat(e.target.getAttribute('data-speed'));
-		});
-	});
 }
 
 main().catch((err) => {
