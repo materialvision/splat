@@ -305,6 +305,9 @@ function translate4(a, x, y, z) {
 function createWorker(self) {
 	let buffer;
 	let vertexCount = 0;
+	let vertexCountA = 0;
+	let fadeAmount = 0;
+	let fadeMode = 0;
 	let viewProj;
 	let globalScaleFactor = 1;
 	let randomOffsetX = 0;
@@ -414,7 +417,24 @@ function createWorker(self) {
 				color[4 * j + 0] = u_buffer[32 * i + 24 + 0] / 255;
 				color[4 * j + 1] = u_buffer[32 * i + 24 + 1] / 255;
 				color[4 * j + 2] = u_buffer[32 * i + 24 + 2] / 255;
-				color[4 * j + 3] = u_buffer[32 * i + 24 + 3] / 255;
+
+				let alpha = u_buffer[32 * i + 24 + 3] / 255;
+				if (fadeMode > 0) {
+					let isA = (i < vertexCountA);
+					if (fadeMode == 1) {
+						// Random fade
+						let hash = Math.abs(Math.sin(i * 12.9898 + 78.233) * 43758.5453) % 1.0;
+						if (isA && hash < fadeAmount) alpha = 0;
+						if (!isA && hash >= fadeAmount) alpha = 0;
+					} else if (fadeMode == 2) {
+						// Center outwards
+						let dist = Math.hypot(f_buffer[8 * i + 0], f_buffer[8 * i + 1], f_buffer[8 * i + 2]);
+						let radius = fadeAmount * 8.0; 
+						if (isA && dist < radius) alpha = 0;
+						if (!isA && dist >= radius) alpha = 0;
+					}
+				}
+				color[4 * j + 3] = alpha;
 
 				let scale = [
 					f_buffer[8 * i + 3 + 0] * globalScaleFactor,
@@ -501,6 +521,13 @@ function createWorker(self) {
 		if (e.data.buffer) {
 			buffer = e.data.buffer;
 			vertexCount = e.data.vertexCount;
+			vertexCountA = e.data.vertexCountA || vertexCount;
+			fadeAmount = e.data.fadeAmount || 0;
+			fadeMode = e.data.fadeMode || 0;
+		} else if (e.data.fadeAmount !== undefined) {
+			fadeAmount = e.data.fadeAmount;
+			fadeMode = e.data.fadeMode !== undefined ? e.data.fadeMode : fadeMode;
+			if (viewProj) throttledSort();
 		} else if (e.data.vertexCount) {
 			vertexCount = e.data.vertexCount;
 		} else if (e.data.view) {
@@ -1536,6 +1563,7 @@ async function main() {
 	const filenameExtension = '.splat';
 
 	let maxModelIndex = Infinity;
+	let currentSplatBuffer = null;
 
 	function loadSplatModel() {
 		if (modelIndex > maxModelIndex) {
@@ -1557,6 +1585,7 @@ async function main() {
 				return response.arrayBuffer();
 			})
 			.then(buffer => {
+				currentSplatBuffer = buffer;
 				processModel(buffer, fileName);
 			})
 			.catch(error => {
@@ -1577,6 +1606,190 @@ async function main() {
 				maxModelIndex = Infinity; // Reset ceiling rule for new folder
 				loadSplatModel();
 			}
+		}
+	});
+
+	window.renderFolderList = () => {
+		const folderList = document.getElementById('folder-list');
+		if (!folderList) return;
+		folderList.innerHTML = '';
+		
+		splatFolders.forEach((fullPath, idx) => {
+			const item = document.createElement('div');
+			item.className = 'folder-item';
+			item.style.display = 'flex';
+			item.style.justifyContent = 'space-between';
+			item.style.alignItems = 'center';
+
+			const label = document.createElement('span');
+			label.style.flexGrow = '1';
+			label.innerText = fullPath.replace('./splats/', '').replace('/', '');
+			label.addEventListener('click', () => {
+				directoryPath = fullPath;
+				console.log('Switched to folder via menu:', directoryPath);
+				maxModelIndex = Infinity; // Reset ceiling rule for new folder
+				loadSplatModel();
+				document.getElementById('folder-overlay').classList.add('hidden');
+			});
+
+			const btnContainer = document.createElement('div');
+			const upBtn = document.createElement('button');
+			upBtn.innerText = '↑';
+			upBtn.style.marginRight = '5px';
+			upBtn.disabled = idx === 0;
+			upBtn.onclick = () => window.moveFolder(idx, -1);
+			
+			const downBtn = document.createElement('button');
+			downBtn.innerText = '↓';
+			downBtn.disabled = idx === splatFolders.length - 1;
+			downBtn.onclick = () => window.moveFolder(idx, 1);
+
+			btnContainer.appendChild(upBtn);
+			btnContainer.appendChild(downBtn);
+			
+			item.appendChild(label);
+			item.appendChild(btnContainer);
+			folderList.appendChild(item);
+		});
+	};
+
+	window.moveFolder = (idx, dir) => {
+		if (idx + dir < 0 || idx + dir >= splatFolders.length) return;
+		const temp = splatFolders[idx];
+		splatFolders[idx] = splatFolders[idx + dir];
+		splatFolders[idx + dir] = temp;
+		window.renderFolderList();
+	};
+
+	let fadeAmount = 0.0;
+	let currentFadeVelocity = 0.0;
+	let isFadePlaying = false;
+	let fadeSequenceDirection = 1; // 1 = forward, -1 = backward
+	let isFadeInitialized = false;
+	let fadeFolderB = null;
+	let fadeTargetFolderDir = 1;
+	let currentSplatBufferB = null;
+
+	document.getElementById('btn-fade-dir')?.addEventListener('click', (e) => {
+		fadeSequenceDirection *= -1;
+		e.target.innerText = fadeSequenceDirection === 1 ? 'Dir: Forward' : 'Dir: Backward';
+	});
+
+	let lastFadeTime = 0;
+	function animateFadeLoop(now) {
+		if (!isFadeInitialized) return;
+		
+		let dt = (now - lastFadeTime) / 1000.0;
+		lastFadeTime = now;
+		if (dt > 0.1) dt = 0.1; // clamp delta
+		
+		let speedSlider = parseFloat(document.getElementById('fade-speed').value) || 0.5;
+		let targetVel = 0;
+		if (isFadePlaying) {
+			if (fadeSequenceDirection === fadeTargetFolderDir) {
+				targetVel = speedSlider;
+			} else {
+				targetVel = -speedSlider;
+			}
+		}
+		
+		// Smooth velocity (easing)
+		currentFadeVelocity += (targetVel - currentFadeVelocity) * 5.0 * dt;
+		
+		// Apply velocity
+		fadeAmount += currentFadeVelocity * dt;
+		
+		const fadeMode = parseInt(document.getElementById('fade-mode').value) || 1;
+
+		if (fadeAmount >= 1.0) {
+			// Reached B!
+			directoryPath = fadeFolderB;
+			currentSplatBuffer = currentSplatBufferB;
+			worker.postMessage({
+				buffer: currentSplatBuffer,
+				vertexCount: currentSplatBuffer.byteLength / 32,
+				vertexCountA: currentSplatBuffer.byteLength / 32,
+				fadeAmount: 0.0,
+				fadeMode: 0
+			});
+			isFadeInitialized = false;
+			isFadePlaying = false;
+			document.getElementById('btn-fade-play').innerText = 'Play';
+			return; // Stop loop
+		} else if (fadeAmount <= 0.0 && currentFadeVelocity <= 0 && targetVel <= 0) {
+			// Reverted back to A!
+			worker.postMessage({
+				buffer: currentSplatBuffer,
+				vertexCount: currentSplatBuffer.byteLength / 32,
+				vertexCountA: currentSplatBuffer.byteLength / 32,
+				fadeAmount: 0.0,
+				fadeMode: 0
+			});
+			isFadeInitialized = false;
+			isFadePlaying = false;
+			document.getElementById('btn-fade-play').innerText = 'Play';
+			return; // Stop loop
+		}
+		
+		let renderFade = Math.max(0.0, Math.min(1.0, fadeAmount));
+		worker.postMessage({ fadeAmount: renderFade, fadeMode: fadeMode });
+		
+		if (isFadePlaying || Math.abs(currentFadeVelocity) > 0.005) {
+			requestAnimationFrame(animateFadeLoop);
+		}
+	}
+
+	document.getElementById('btn-fade-play')?.addEventListener('click', (e) => {
+		isFadePlaying = !isFadePlaying;
+		e.target.innerText = isFadePlaying ? 'Pause' : 'Play';
+		
+		if (isFadePlaying && !isFadeInitialized) {
+			let currentFolderIndex = splatFolders.indexOf(directoryPath);
+			let targetIndex = currentFolderIndex + fadeSequenceDirection;
+			if (targetIndex < 0 || targetIndex >= splatFolders.length) {
+				isFadePlaying = false;
+				e.target.innerText = 'Play';
+				return;
+			}
+			
+			fadeTargetFolderDir = fadeSequenceDirection;
+			fadeFolderB = splatFolders[targetIndex];
+			const pathB = `${fadeFolderB}/${filenamePrefix}${String(modelIndex).padStart(5, '0')}${filenameExtension}`;
+			
+			e.target.innerText = 'Loading...';
+			fetch(pathB).then(r => r.ok ? r.arrayBuffer() : Promise.reject('Missing next splat'))
+			.then(bufferB => {
+				const bufA = currentSplatBuffer;
+				if (!bufA) { isFadePlaying = false; e.target.innerText = 'Play'; return; }
+				
+				const combined = new Uint8Array(bufA.byteLength + bufferB.byteLength);
+				combined.set(new Uint8Array(bufA), 0);
+				combined.set(new Uint8Array(bufferB), bufA.byteLength);
+				
+				currentSplatBufferB = bufferB;
+				fadeAmount = 0.0;
+				currentFadeVelocity = 0.0;
+				
+				worker.postMessage({
+					buffer: combined.buffer,
+					vertexCount: combined.length / 32,
+					vertexCountA: bufA.byteLength / 32,
+					fadeAmount: 0.0,
+					fadeMode: parseInt(document.getElementById('fade-mode').value) || 1
+				});
+				
+				isFadeInitialized = true;
+				e.target.innerText = 'Pause';
+				lastFadeTime = performance.now();
+				requestAnimationFrame(animateFadeLoop);
+			}).catch(err => {
+				console.error("Fade load failed:", err);
+				isFadePlaying = false;
+				e.target.innerText = 'Play';
+			});
+		} else if (isFadePlaying && isFadeInitialized) {
+			lastFadeTime = performance.now();
+			requestAnimationFrame(animateFadeLoop);
 		}
 	});
 
@@ -1712,27 +1925,12 @@ async function main() {
 
 				if (folders.length > 0) {
 					splatFolders.length = 0; // Clear the hardcoded ones
-					const folderList = document.getElementById('folder-list');
-					folderList.innerHTML = '';
-
-					folders.forEach((folder) => {
-						const fullPath = `./splats/${folder}`;
-						splatFolders.push(fullPath);
-
-						const item = document.createElement('div');
-						item.className = 'folder-item';
-						item.innerText = folder.replace('/', '');
-
-						item.addEventListener('click', () => {
-							directoryPath = fullPath;
-							console.log('Switched to folder via menu:', directoryPath);
-							maxModelIndex = Infinity; // Reset ceiling rule for new folder
-							loadSplatModel();
-							folderOverlay.classList.add('hidden');
-						});
-
-						folderList.appendChild(item);
+					
+					folders.forEach(folder => {
+						splatFolders.push(`./splats/${folder}`);
 					});
+
+					window.renderFolderList();
 				} else {
 					document.getElementById('folder-list').innerHTML = '<div style="font-size:0.8rem; color:#aaa; font-style:italic;">No folders found</div>';
 				}
