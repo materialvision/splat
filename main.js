@@ -519,7 +519,7 @@ const vertexShaderSource = `
   attribute vec3 covA;
   attribute vec3 covB;
 
-  uniform mat4 projection, view;
+  uniform mat4 projection, view, model;
   uniform vec2 focal;
   uniform vec2 viewport;
 
@@ -535,7 +535,8 @@ const vertexShaderSource = `
   }
 
   void main () {
-    vec4 camspace = view * vec4(center, 1);
+    vec4 worldspace = model * vec4(center, 1.0);
+    vec4 camspace = view * worldspace;
     vec4 pos2d = projection * camspace;
 
     float bounds = 1.2 * pos2d.w;
@@ -557,7 +558,7 @@ const vertexShaderSource = `
         0., 0., 0.
     );
 
-    mat3 W = transpose(mat3(view));
+    mat3 W = transpose(mat3(view * model));
     mat3 T = W * J;
     mat3 cov = transpose(T) * Vrk * T;
     
@@ -613,9 +614,16 @@ let defaultViewMatrix = [
 ];
 
 let viewMatrix = defaultViewMatrix;
+let activeModelMatrix = [
+	1, 0, 0, 0,
+	0, 1, 0, 0,
+	0, 0, 1, 0,
+	0, 0, 0, 1
+];
+
 let activeDownsample = null
 async function main() {
-	let carousel = true;
+	let carousel = false;
 
 	const params = new URLSearchParams(location.search);
 	try {
@@ -734,6 +742,10 @@ async function main() {
 	const u_view = gl.getUniformLocation(program, "view");
 	gl.uniformMatrix4fv(u_view, false, viewMatrix);
 
+	// model
+	const u_model = gl.getUniformLocation(program, "model");
+	gl.uniformMatrix4fv(u_model, false, activeModelMatrix);
+
 	// positions
 	const triangleVertices = new Float32Array([-2, -2, 2, -2, 2, 2, -2, 2]);
 	const vertexBuffer = gl.createBuffer();
@@ -846,6 +858,101 @@ async function main() {
 	});
 	window.addEventListener("blur", () => {
 		activeKeys = [];
+	});
+
+	// Transform UI
+	const uiContainer = document.createElement('div');
+	uiContainer.style.position = 'fixed';
+	uiContainer.style.top = '10px';
+	uiContainer.style.right = '10px';
+	uiContainer.style.background = 'rgba(0,0,0,0.8)';
+	uiContainer.style.color = 'white';
+	uiContainer.style.padding = '15px';
+	uiContainer.style.borderRadius = '8px';
+	uiContainer.style.zIndex = '1000';
+	uiContainer.style.fontFamily = 'monospace';
+	uiContainer.style.display = 'none';
+	uiContainer.id = 'transform-ui';
+
+	uiContainer.innerHTML = `
+		<h3 style="margin-top:0">Model Transform</h3>
+		<p style="font-size: 0.8em; margin-bottom: 10px; color: #ccc;">Press Tab to show/hide</p>
+		<div><label style="display:inline-block; width: 30px;">Tx:</label> <input type="range" id="m-tx" min="-10" max="10" step="0.01" value="0"> <span id="val-tx" style="display:inline-block; width: 40px; text-align:right;">0</span></div>
+		<div><label style="display:inline-block; width: 30px;">Ty:</label> <input type="range" id="m-ty" min="-10" max="10" step="0.01" value="0"> <span id="val-ty" style="display:inline-block; width: 40px; text-align:right;">0</span></div>
+		<div><label style="display:inline-block; width: 30px;">Tz:</label> <input type="range" id="m-tz" min="-10" max="10" step="0.01" value="0"> <span id="val-tz" style="display:inline-block; width: 40px; text-align:right;">0</span></div>
+		<div><label style="display:inline-block; width: 30px;">Rx:</label> <input type="range" id="m-rx" min="-180" max="180" step="1" value="0"> <span id="val-rx" style="display:inline-block; width: 40px; text-align:right;">0</span></div>
+		<div><label style="display:inline-block; width: 30px;">Ry:</label> <input type="range" id="m-ry" min="-180" max="180" step="1" value="0"> <span id="val-ry" style="display:inline-block; width: 40px; text-align:right;">0</span></div>
+		<div><label style="display:inline-block; width: 30px;">Rz:</label> <input type="range" id="m-rz" min="-180" max="180" step="1" value="0"> <span id="val-rz" style="display:inline-block; width: 40px; text-align:right;">0</span></div>
+		<div style="margin-top: 15px;">
+			<button id="reset-transform" style="background: #444; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; width: 100%; margin-bottom: 10px;">Reset to Default</button>
+			<strong>Export command:</strong><br/>
+			<textarea id="export-cmd" readonly style="width: 100%; height: 60px; background: #222; color: #0f0; border: 1px solid #555; margin-top: 5px; resize: none;"></textarea>
+		</div>
+	`;
+	document.body.appendChild(uiContainer);
+
+	let modelTx = 0, modelTy = 0, modelTz = 0;
+	let modelRx = 0, modelRy = 0, modelRz = 0;
+	let directoryPath = './splats/1/';
+
+	const updateModelMatrix = () => {
+		let m = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+		m = translate4(m, modelTx, modelTy, modelTz);
+		m = rotate4(m, modelRz * Math.PI / 180, 0, 0, 1);
+		m = rotate4(m, modelRy * Math.PI / 180, 0, 1, 0);
+		m = rotate4(m, modelRx * Math.PI / 180, 1, 0, 0);
+		activeModelMatrix = m;
+		
+		const cmd = `python transform_splat.py "${directoryPath}" --translate ${modelTx} ${modelTy} ${modelTz} --rotate ${modelRx} ${modelRy} ${modelRz}`;
+		document.getElementById('export-cmd').value = cmd;
+		
+		needUpdate = true;
+	};
+	updateModelMatrix();
+
+	document.getElementById('reset-transform').addEventListener('click', () => {
+		modelTx = 0; modelTy = 0; modelTz = 0;
+		modelRx = 0; modelRy = 0; modelRz = 0;
+		['m-tx', 'm-ty', 'm-tz', 'm-rx', 'm-ry', 'm-rz'].forEach(id => {
+			document.getElementById(id).value = 0;
+			document.getElementById(id.replace('m-', 'val-')).innerText = '0';
+		});
+		updateModelMatrix();
+		
+		// Reset camera
+		viewMatrix = defaultViewMatrix;
+		smTx = 0; smTy = 0; smTz = 0;
+		smRy = 0; smRz = 0; smRx = 0;
+		smOx = 0; smOy = 0;
+	});
+
+	const attachSlider = (id, varName) => {
+		const el = document.getElementById(id);
+		const valEl = document.getElementById(id.replace('m-', 'val-'));
+		el.addEventListener('input', (e) => {
+			const v = parseFloat(e.target.value);
+			valEl.innerText = v;
+			if (varName === 'tx') modelTx = v;
+			if (varName === 'ty') modelTy = v;
+			if (varName === 'tz') modelTz = v;
+			if (varName === 'rx') modelRx = v;
+			if (varName === 'ry') modelRy = v;
+			if (varName === 'rz') modelRz = v;
+			updateModelMatrix();
+		});
+	};
+	attachSlider('m-tx', 'tx');
+	attachSlider('m-ty', 'ty');
+	attachSlider('m-tz', 'tz');
+	attachSlider('m-rx', 'rx');
+	attachSlider('m-ry', 'ry');
+	attachSlider('m-rz', 'rz');
+
+	window.addEventListener('keydown', (e) => {
+		if (e.key === 'Tab') {
+			e.preventDefault();
+			uiContainer.style.display = uiContainer.style.display === 'none' ? 'block' : 'none';
+		}
 	});
 
 	window.addEventListener(
@@ -1106,10 +1213,10 @@ async function main() {
 	function getNoise(offset) {
 		return (noise(offset) - 0.0) * 2; // Normalizing to be between -1 and 1
 	}
-	// Damping state variables
-	let smTx = 0, smTy = 0, smTz = 0;
-	let smRy = 0, smRz = 0, smRx = 0;
-	let smOx = 0, smOy = 0;
+	// Damping state variables are hoisted to main() level by changing to var
+	var smTx = 0, smTy = 0, smTz = 0;
+	var smRy = 0, smRz = 0, smRx = 0;
+	var smOx = 0, smOy = 0;
 
 	let globalMovementSpeed = 1.0;
 	let lastModelLoadTime = 0;
@@ -1282,8 +1389,9 @@ async function main() {
 		inv2 = rotate4(inv2, -0.1 * jumpDelta, 1, 0, 0);
 		let actualViewMatrix = invert4(inv2);
 
-		const viewProj = multiply4(projectionMatrix, actualViewMatrix);
-		worker.postMessage({ view: viewProj });
+		const actualViewModelMatrix = multiply4(actualViewMatrix, activeModelMatrix);
+		const viewProjModel = multiply4(projectionMatrix, actualViewModelMatrix);
+		worker.postMessage({ view: viewProjModel });
 
 		const currentFps = 1000 / (now - lastFrame) || 0;
 		avgFps = avgFps * 0.9 + currentFps * 0.1;
@@ -1292,6 +1400,7 @@ async function main() {
 			document.getElementById("spinner").style.display = "none";
 			// console.time('render')
 			gl.uniformMatrix4fv(u_view, false, actualViewMatrix);
+			gl.uniformMatrix4fv(u_model, false, activeModelMatrix);
 			ext.drawArraysInstancedANGLE(gl.TRIANGLE_FAN, 0, 4, vertexCount);
 			// console.timeEnd('render')
 		} else {
@@ -1422,7 +1531,7 @@ async function main() {
 	//const filenamePrefix = 'anartistic_';  // The common prefix for all files
 	//const filenameExtension = '.splat';
 
-	let directoryPath = './splats/1/';
+	directoryPath = './splats/1/';
 	const filenamePrefix = 'model_'; // Constant prefix
 	const filenameExtension = '.splat';
 
@@ -1465,7 +1574,6 @@ async function main() {
 			const folderIndex = parseInt(event.code.replace('Digit', ''), 10) - 1; // Convert key to array index
 			if (folderIndex >= 0 && folderIndex < splatFolders.length) {
 				directoryPath = splatFolders[folderIndex];
-				modelIndex = 0;
 				maxModelIndex = Infinity; // Reset ceiling rule for new folder
 				loadSplatModel();
 			}
@@ -1618,7 +1726,6 @@ async function main() {
 						item.addEventListener('click', () => {
 							directoryPath = fullPath;
 							console.log('Switched to folder via menu:', directoryPath);
-							modelIndex = 0;
 							maxModelIndex = Infinity; // Reset ceiling rule for new folder
 							loadSplatModel();
 							folderOverlay.classList.add('hidden');
