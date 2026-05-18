@@ -1923,6 +1923,8 @@ async function main() {
 					.map(a => a.getAttribute('href'))
 					.filter(href => href && href !== '../' && href.endsWith('/'));
 
+				folders.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
 				if (folders.length > 0) {
 					splatFolders.length = 0; // Clear the hardcoded ones
 					

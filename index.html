@@ -448,7 +448,7 @@
 		/* Crossfade Overlay */
 		#crossfade-overlay {
 			position: absolute;
-			bottom: 30px;
+			bottom: 80px;
 			left: 50%;
 			transform: translateX(-50%);
 			z-index: 1000;
@@ -463,6 +463,47 @@
 			width: 320px;
 			box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 			pointer-events: auto;
+			opacity: 1;
+			transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+		}
+
+		#crossfade-overlay.hidden {
+			transform: translateX(-50%) translateY(20px) scale(0.95);
+			opacity: 0;
+			pointer-events: none;
+		}
+
+		/* Crossfade Menu Button */
+		#crossfade-menu-btn {
+			position: absolute;
+			bottom: 20px;
+			left: 50%;
+			transform: translateX(-50%);
+			z-index: 1001;
+			background: rgba(15, 15, 20, 0.7);
+			backdrop-filter: blur(12px);
+			border: 1px solid rgba(255, 255, 255, 0.15);
+			color: white;
+			width: 44px;
+			height: 44px;
+			border-radius: 50%;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			cursor: pointer;
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+			transition: all 0.3s ease;
+		}
+
+		#crossfade-menu-btn:hover {
+			background: rgba(255, 255, 255, 0.15);
+			transform: translateX(-50%) scale(1.05);
+		}
+
+		#crossfade-menu-btn svg {
+			width: 22px;
+			height: 22px;
+			fill: currentColor;
 		}
 	</style>
 </head>
@@ -570,8 +611,15 @@
 		</div>
 	</div>
 
+	<!-- Crossfade Menu Button -->
+	<button id="crossfade-menu-btn" title="Toggle Crossfade Menu">
+		<svg viewBox="0 0 24 24">
+			<path d="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z"/>
+		</svg>
+	</button>
+
 	<!-- Crossfade Overlay -->
-	<div id="crossfade-overlay">
+	<div id="crossfade-overlay" class="hidden">
 		<h4 style="margin-top:0; margin-bottom:15px; font-size:1.1rem; border-bottom:1px solid rgba(255,255,255,0.15); padding-bottom:8px; text-transform:uppercase;">Crossfade Sequence</h4>
 		<select id="fade-mode" style="background:#222; color:#fff; padding:5px; border-radius:4px; margin-bottom:10px; width:100%; border: 1px solid #555;">
 			<option value="1">Random Points</option>
@@ -602,6 +650,12 @@
 			if (e.key === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey) {
 				overlay.classList.toggle('hidden');
 			}
+		});
+
+		const crossfadeOverlay = document.getElementById('crossfade-overlay');
+		const crossfadeBtn = document.getElementById('crossfade-menu-btn');
+		crossfadeBtn.addEventListener('click', () => {
+			crossfadeOverlay.classList.toggle('hidden');
 		});
 	</script>
 	<script src="main.js"></script>
