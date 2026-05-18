@@ -542,6 +542,73 @@
 	<div id="quality">
 		<span hidden id="fps"></span>
 	</div>
+
+	<!-- Performance Menu Button -->
+	<button id="perf-menu-btn" title="Toggle Performance Options" style="position: absolute; top: 20px; left: 20px; z-index: 1001; background: rgba(15, 15, 20, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.15); color: white; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); transition: all 0.3s ease;">
+		<svg viewBox="0 0 24 24" style="width: 22px; height: 22px; fill: currentColor;">
+			<path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/>
+		</svg>
+	</button>
+
+	<!-- Performance Overlay -->
+	<div id="perf-overlay" class="hidden" style="position: absolute; top: 80px; left: 20px; z-index: 1000; background: rgba(15, 15, 20, 0.7); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 15px 20px; color: rgba(255, 255, 255, 0.9); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; width: 280px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); pointer-events: auto; opacity: 1; transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);">
+		<h4 style="margin-top:0; margin-bottom:15px; font-size:1.1rem; border-bottom:1px solid rgba(255,255,255,0.15); padding-bottom:8px; text-transform:uppercase;">Performance Options</h4>
+		
+		<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+			<label style="font-size:0.8rem; color:#aaa;">Auto LOD (Dynamic Detail):</label>
+			<input type="checkbox" id="auto-lod-toggle" checked style="cursor:pointer; width: 16px; height: 16px;">
+		</div>
+		
+		<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+			<label style="font-size:0.8rem; color:#aaa;">Target FPS:</label>
+			<select id="target-fps-select" style="background:#222; color:#fff; border: 1px solid #555; border-radius:4px; padding:4px; font-size:0.8rem;">
+				<option value="12">12 FPS</option>
+				<option value="18">18 FPS</option>
+				<option value="24">24 FPS</option>
+				<option value="30" selected>30 FPS</option>
+				<option value="45">45 FPS</option>
+				<option value="60">60 FPS</option>
+			</select>
+		</div>
+
+		<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+			<label style="font-size:0.8rem; color:#aaa;" title="Limits the maximum framerate to the Target FPS (e.g., for stop-motion effect)">Clamp FPS (Stop-Motion):</label>
+			<input type="checkbox" id="clamp-fps-toggle" style="cursor:pointer; width: 16px; height: 16px;">
+		</div>
+
+		<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; border-top:1px solid rgba(255,255,255,0.15); padding-top:10px;">
+			<label style="font-size:0.8rem; color:#aaa;" title="Makes the edges of the splats harder, avoiding dense fog when overlapping">Splat Sharpness:</label>
+			<input type="range" id="sharpness-slider" min="0" max="1" step="0.05" value="0" style="width: 100px;">
+		</div>
+
+		<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+			<label style="font-size:0.8rem; color:#aaa;" title="Morphs the splat shape from Ellipse to Rectangle">Splat Shape (Rect):</label>
+			<input type="range" id="shape-slider" min="0" max="1" step="0.05" value="0" style="width: 100px;">
+		</div>
+
+		<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+			<label style="font-size:0.8rem; color:#aaa;" title="Hides splats that are larger than this on screen (removes background/fog)">Max Size Cutoff:</label>
+			<input type="range" id="size-cutoff-slider" min="10" max="2048" step="10" value="2048" style="width: 100px;">
+		</div>
+
+		<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+			<label style="font-size:0.8rem; color:#aaa;" title="Cuts away splats that are far from the center of the landscape">Distance Crop:</label>
+			<input type="range" id="distance-crop-slider" min="0" max="1" step="0.01" value="1" style="width: 100px;">
+		</div>
+
+		<div style="font-size:0.8rem; margin-bottom:10px; color:#aaa; border-top:1px solid rgba(255,255,255,0.15); padding-top:10px;">
+			Manual Point Reduction ( , / . ):
+		</div>
+		<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+			<label style="font-size:0.8rem; color:#aaa;">Reduction Level (%):</label>
+			<input type="range" id="lod-slider" min="0" max="100" step="1" value="0" style="width: 100px;">
+		</div>
+		<div style="display:flex; gap: 5px; margin-bottom: 5px;">
+			<button id="btn-lod-increase" style="flex:1; background:#444; color:#fff; padding:6px; border:none; border-radius:4px; cursor:pointer; font-size:0.9rem;">Decrease Details (,)</button>
+			<button id="btn-lod-decrease" style="flex:1; background:#444; color:#fff; padding:6px; border:none; border-radius:4px; cursor:pointer; font-size:0.9rem;">Increase Details (.)</button>
+		</div>
+	</div>
+
 	<!-- Toggle Button -->
 	<button id="toggle-controls-btn" title="Toggle Controls">
 		<svg viewBox="0 0 24 24">
@@ -560,6 +627,8 @@
 			<li>Record Video <kbd>r</kbd></li>
 			<li>Save View to URL <kbd>v</kbd></li>
 			<li>Default Animation <kbd>p</kbd></li>
+			<li>Adjust Quality (LOD) <kbd>.</kbd> / <kbd>,</kbd></li>
+			<li>Splat Sharpness <kbd>z</kbd> / <kbd>x</kbd> (or <kbd>[</kbd> / <kbd>]</kbd>)</li>
 		</ul>
 
 		<h4>Splat Settings</h4>
@@ -711,6 +780,23 @@
 		// Initialize styles for transition
 		kfOverlay.style.transform = 'translateY(20px) scale(0.95)';
 		kfOverlay.style.opacity = '0';
+		// Initialize performance overlay UI
+		const perfOverlay = document.getElementById('perf-overlay');
+		const perfBtn = document.getElementById('perf-menu-btn');
+		if (perfBtn && perfOverlay) {
+			perfBtn.addEventListener('click', () => {
+				perfOverlay.classList.toggle('hidden');
+				if (!perfOverlay.classList.contains('hidden')) {
+					perfOverlay.style.transform = 'translateY(0) scale(1)';
+					perfOverlay.style.opacity = '1';
+				} else {
+					perfOverlay.style.transform = 'translateY(-20px) scale(0.95)';
+					perfOverlay.style.opacity = '0';
+				}
+			});
+			perfOverlay.style.transform = 'translateY(-20px) scale(0.95)';
+			perfOverlay.style.opacity = '0';
+		}
 	</script>
 	<script src="main.js"></script>
 </body>

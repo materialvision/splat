@@ -542,21 +542,17 @@ function createWorker(self) {
 
 		lastProj = viewProj;
 		// console.timeEnd("sort");
-		let moduloValue;
+		let reductionPct = self.currentDynamicLOD || 0.0;
+		const fractionToKeep = Math.max(0.0, 1.0 - (reductionPct / 100.0));
 
-		if (vertexCount > 800000) {
-			moduloValue = 4; // Use modulo 4 when vertexCount is over 800,000
-		} else if (vertexCount > 600000) {
-			moduloValue = 3; // Use modulo 3 when vertexCount is over 600,000
-		} else if (vertexCount > 400000) {
-			moduloValue = 2; // Use modulo 2 when vertexCount is over 400,000
-		} else {
-			moduloValue = 1; // No skipping when vertexCount is 400,000 or below
-		}
-
+		let renderedCount = 0;
 		for (let j = 0; j < vertexCount; j++) {
-			if (j % moduloValue === 0) {
-				const i = depthIndex[j];
+			const i = depthIndex[j];
+			
+			// Use a golden-ratio hash of the original index to deterministically and smoothly cull points
+			// This allows points to disappear/reappear individually rather than in massive blocks
+			const hash = (i * 0.618033988749895) % 1.0;
+			if (hash <= fractionToKeep) {
 
 				// Apply noise for variable center shake
 				//noiseOffsetX += 0.1;
@@ -574,13 +570,13 @@ function createWorker(self) {
 					randomOffsetZ = (Math.random() - 0.5) * randomScale;
 				}
 
-				center[3 * j + 0] = f_buffer[8 * i + 0] + randomOffsetX;
-				center[3 * j + 1] = f_buffer[8 * i + 1] + randomOffsetY;
-				center[3 * j + 2] = f_buffer[8 * i + 2] + randomOffsetZ;
+				center[3 * renderedCount + 0] = f_buffer[8 * i + 0] + randomOffsetX;
+				center[3 * renderedCount + 1] = f_buffer[8 * i + 1] + randomOffsetY;
+				center[3 * renderedCount + 2] = f_buffer[8 * i + 2] + randomOffsetZ;
 
-				color[4 * j + 0] = u_buffer[32 * i + 24 + 0] / 255;
-				color[4 * j + 1] = u_buffer[32 * i + 24 + 1] / 255;
-				color[4 * j + 2] = u_buffer[32 * i + 24 + 2] / 255;
+				color[4 * renderedCount + 0] = u_buffer[32 * i + 24 + 0] / 255;
+				color[4 * renderedCount + 1] = u_buffer[32 * i + 24 + 1] / 255;
+				color[4 * renderedCount + 2] = u_buffer[32 * i + 24 + 2] / 255;
 
 				let alpha = u_buffer[32 * i + 24 + 3] / 255;
 				if (fadeMode > 0) {
@@ -598,7 +594,7 @@ function createWorker(self) {
 						if (!isA && dist >= radius) alpha = 0;
 					}
 				}
-				color[4 * j + 3] = alpha;
+				color[4 * renderedCount + 3] = alpha;
 
 				let scale = [
 					f_buffer[8 * i + 3 + 0] * globalScaleFactor,
@@ -639,15 +635,24 @@ function createWorker(self) {
 					scale[2] * R[8],
 				];
 
-				covA[3 * j + 0] = M[0] * M[0] + M[3] * M[3] + M[6] * M[6];
-				covA[3 * j + 1] = M[0] * M[1] + M[3] * M[4] + M[6] * M[7];
-				covA[3 * j + 2] = M[0] * M[2] + M[3] * M[5] + M[6] * M[8];
-				covB[3 * j + 0] = M[1] * M[1] + M[4] * M[4] + M[7] * M[7];
-				covB[3 * j + 1] = M[1] * M[2] + M[4] * M[5] + M[7] * M[8];
-				covB[3 * j + 2] = M[2] * M[2] + M[5] * M[5] + M[8] * M[8];
+				covA[3 * renderedCount + 0] = M[0] * M[0] + M[3] * M[3] + M[6] * M[6];
+				covA[3 * renderedCount + 1] = M[0] * M[1] + M[3] * M[4] + M[6] * M[7];
+				covA[3 * renderedCount + 2] = M[0] * M[2] + M[3] * M[5] + M[6] * M[8];
+				covB[3 * renderedCount + 0] = M[1] * M[1] + M[4] * M[4] + M[7] * M[7];
+				covB[3 * renderedCount + 1] = M[1] * M[2] + M[4] * M[5] + M[7] * M[8];
+				covB[3 * renderedCount + 2] = M[2] * M[2] + M[5] * M[5] + M[8] * M[8];
+				
+				renderedCount++;
 			}
 		}
-		self.postMessage({ covA, center, color, covB, viewProj }, [
+		self.postMessage({ 
+			covA: covA.subarray(0, 3 * renderedCount), 
+			center: center.subarray(0, 3 * renderedCount), 
+			color: color.subarray(0, 4 * renderedCount), 
+			covB: covB.subarray(0, 3 * renderedCount), 
+			viewProj, 
+			renderedCount 
+		}, [
 			covA.buffer,
 			center.buffer,
 			color.buffer,
@@ -696,6 +701,7 @@ function createWorker(self) {
 			vertexCount = e.data.vertexCount;
 		} else if (e.data.view) {
 			viewProj = e.data.view;
+			if (e.data.dynamicLOD !== undefined) self.currentDynamicLOD = e.data.dynamicLOD;
 			throttledSort();
 		}
 	};
@@ -713,6 +719,8 @@ const vertexShaderSource = `
   uniform mat4 projection, view, model;
   uniform vec2 focal;
   uniform vec2 viewport;
+  uniform float u_maxSplatSize;
+  uniform float u_maxDistance;
 
   varying vec4 vColor;
   varying vec2 vPosition;
@@ -726,6 +734,11 @@ const vertexShaderSource = `
   }
 
   void main () {
+    if (length(center) > u_maxDistance) {
+        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+        return;
+    }
+
     vec4 worldspace = model * vec4(center, 1.0);
     vec4 camspace = view * worldspace;
     vec4 pos2d = projection * camspace;
@@ -762,6 +775,12 @@ const vertexShaderSource = `
 	float mid = 0.5 * (diagonal1 + diagonal2);
 	float radius = length(vec2((diagonal1 - diagonal2) / 2.0, offDiagonal));
 	float lambda1 = mid + radius;
+    
+    if (sqrt(2.0 * lambda1) > u_maxSplatSize) {
+        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+        return;
+    }
+
 	float lambda2 = max(mid - radius, 0.1);
 	vec2 diagonalVector = normalize(vec2(offDiagonal, lambda1 - diagonal1));
 	vec2 v1 = min(sqrt(2.0 * lambda1), 1024.0) * diagonalVector;
@@ -784,11 +803,33 @@ precision mediump float;
 
   varying vec4 vColor;
   varying vec2 vPosition;
+  uniform float u_sharpness;
+  uniform float u_rectShape;
 
-  void main () {    
-	  float A = -dot(vPosition, vPosition);
+  void main () {
+    // Ellipse distance (Euclidean squared)
+	float circDist = dot(vPosition, vPosition);
+    
+    // Rectangle distance (Chebyshev squared)
+    vec2 absPos = abs(vPosition);
+    float sqDist = max(absPos.x, absPos.y);
+    sqDist = sqDist * sqDist;
+    
+    // Blend between Ellipse and Rectangle
+    float A = -mix(circDist, sqDist, u_rectShape);
+    
     if (A < -4.0) discard;
-    float B = exp(A) * vColor.a;
+    
+    // Default gaussian falloff
+    float B = exp(A);
+    
+    // Calculate a harder, sharper version of the splat (avoid foggy overlaps)
+    float sharpB = smoothstep(0.02, 0.05, B);
+    
+    // Mix between fuzzy gaussian and sharp disk based on slider
+    B = mix(B, sharpB, u_sharpness);
+    
+    B = B * vColor.a;
     gl_FragColor = vec4(B * vColor.rgb, B);
   }
 `;
@@ -947,6 +988,22 @@ async function main() {
 	const u_model = gl.getUniformLocation(program, "model");
 	gl.uniformMatrix4fv(u_model, false, activeModelMatrix);
 
+	// sharpness
+	const u_sharpnessLocation = gl.getUniformLocation(program, "u_sharpness");
+	gl.uniform1f(u_sharpnessLocation, 0.0);
+
+	// shape
+	const u_rectShapeLocation = gl.getUniformLocation(program, "u_rectShape");
+	gl.uniform1f(u_rectShapeLocation, 0.0);
+
+	// size cutoff
+	const u_maxSplatSizeLocation = gl.getUniformLocation(program, "u_maxSplatSize");
+	gl.uniform1f(u_maxSplatSizeLocation, 2048.0);
+
+	// distance crop
+	const u_maxDistanceLocation = gl.getUniformLocation(program, "u_maxDistance");
+	gl.uniform1f(u_maxDistanceLocation, 500.0);
+
 	// positions
 	const triangleVertices = new Float32Array([-2, -2, 2, -2, 2, 2, -2, 2]);
 	const vertexBuffer = gl.createBuffer();
@@ -995,14 +1052,15 @@ async function main() {
 	let lastProj = [];
 	let lastData;
 
+	let renderedVertexCount = 0;
 	worker.onmessage = (e) => {
-		let { covA, covB, center, color, viewProj } = e.data;
+		let { covA, covB, center, color, viewProj, renderedCount } = e.data;
 		lastData = e.data;
 
 		activeDownsample = downsample
 
 		lastProj = viewProj;
-		vertexCount = center.length / 3;
+		renderedVertexCount = renderedCount !== undefined ? renderedCount : center.length / 3;
 
 		gl.bindBuffer(gl.ARRAY_BUFFER, centerBuffer);
 		gl.bufferData(gl.ARRAY_BUFFER, center, gl.DYNAMIC_DRAW);
@@ -1044,7 +1102,7 @@ async function main() {
 				defaultViewMatrix = viewMatrix;
 			}
 		}
-		if (e.key == "v") {
+		if (e.key === "v") {
 			location.hash =
 				"#" +
 				JSON.stringify(
@@ -1052,6 +1110,16 @@ async function main() {
 				);
 		} else if (e.key === "p") {
 			carousel = true;
+		} else if (e.key === ".") {
+			manualLodAdjust(-1.0); // Increase details (reduce reduction %)
+		} else if (e.key === ",") {
+			manualLodAdjust(1.0); // Decrease details (increase reduction %)
+		} else if (e.key === "]" || e.key === "x") {
+			const slider = document.getElementById("sharpness-slider");
+			if (slider) { slider.value = Math.min(1, parseFloat(slider.value) + 0.1); }
+		} else if (e.key === "[" || e.key === "z") {
+			const slider = document.getElementById("sharpness-slider");
+			if (slider) { slider.value = Math.max(0, parseFloat(slider.value) - 0.1); }
 		}
 	});
 	window.addEventListener("keyup", (e) => {
@@ -1366,6 +1434,7 @@ async function main() {
 
 	let lastFrame = 0;
 	let avgFps = 0;
+	let currentDynamicLOD = 0.0; // Reduction percentage (0 = max details, 100 = 0 details)
 	let start = 0;
 
 	//add camera noise
@@ -1529,7 +1598,39 @@ async function main() {
 	// Initialize the list on load
 	updateKfSavedList();
 
+	const manualLodAdjust = (amount) => {
+		currentDynamicLOD = Math.max(0.0, Math.min(100.0, currentDynamicLOD + amount));
+		const autoToggle = document.getElementById("auto-lod-toggle");
+		if (autoToggle) autoToggle.checked = false;
+	};
+
+	document.getElementById("btn-lod-increase")?.addEventListener("click", () => manualLodAdjust(1.0));
+	document.getElementById("btn-lod-decrease")?.addEventListener("click", () => manualLodAdjust(-1.0));
+
+	document.getElementById("lod-slider")?.addEventListener("input", (e) => {
+		currentDynamicLOD = parseFloat(e.target.value);
+		const autoToggle = document.getElementById("auto-lod-toggle");
+		if (autoToggle) autoToggle.checked = false;
+	});
+
+	let lastRenderTime = 0;
 	const frame = (now) => {
+		const targetFpsSelect = document.getElementById("target-fps-select");
+		const targetFps = targetFpsSelect ? parseFloat(targetFpsSelect.value) : 30;
+		const clampToggle = document.getElementById("clamp-fps-toggle");
+
+		if (clampToggle && clampToggle.checked) {
+			const minFrameTime = 1000 / targetFps;
+			if (now - lastRenderTime < minFrameTime) {
+				requestAnimationFrame(frame);
+				return;
+			}
+			// Use remainder to prevent micro-stutters from drifting time
+			lastRenderTime = now - ((now - lastRenderTime) % minFrameTime);
+		} else {
+			lastRenderTime = now;
+		}
+
 		let inv = invert4(viewMatrix);
 
 		// Apply noise for constant camera shake
@@ -1738,24 +1839,61 @@ async function main() {
 
 		const actualViewModelMatrix = multiply4(actualViewMatrix, activeModelMatrix);
 		const viewProjModel = multiply4(projectionMatrix, actualViewModelMatrix);
-		worker.postMessage({ view: viewProjModel });
-
 		const currentFps = 1000 / (now - lastFrame) || 0;
 		avgFps = avgFps * 0.9 + currentFps * 0.1;
+		
+		const autoToggle = document.getElementById("auto-lod-toggle");
+		
+		// Auto-adjust LOD based on performance to prevent stuttering
+		if (autoToggle && autoToggle.checked) {
+			if (avgFps > 0 && avgFps < targetFps * 0.9) {
+				currentDynamicLOD = Math.min(100.0, currentDynamicLOD + 0.5); // struggling, reduce details
+			} else if (avgFps >= targetFps * 0.95) {
+				currentDynamicLOD = Math.max(0.0, currentDynamicLOD - 0.5); // doing fine, increase details
+			}
+		}
 
-		if (vertexCount > 0) {
+		worker.postMessage({ view: viewProjModel, dynamicLOD: currentDynamicLOD });
+
+		const lodSlider = document.getElementById("lod-slider");
+		if (lodSlider && document.activeElement !== lodSlider) {
+			lodSlider.value = currentDynamicLOD;
+		}
+
+		if (renderedVertexCount > 0) {
 			document.getElementById("spinner").style.display = "none";
 			// console.time('render')
+			
+			const sharpnessSlider = document.getElementById("sharpness-slider");
+			const sharpnessValue = sharpnessSlider ? parseFloat(sharpnessSlider.value) : 0.0;
+			gl.uniform1f(u_sharpnessLocation, sharpnessValue);
+			
+			const shapeSlider = document.getElementById("shape-slider");
+			const shapeValue = shapeSlider ? parseFloat(shapeSlider.value) : 0.0;
+			gl.uniform1f(u_rectShapeLocation, shapeValue);
+			
+			const sizeCutoffSlider = document.getElementById("size-cutoff-slider");
+			const sizeCutoffValue = sizeCutoffSlider ? parseFloat(sizeCutoffSlider.value) : 2048.0;
+			gl.uniform1f(u_maxSplatSizeLocation, sizeCutoffValue);
+			
+			const distCropSlider = document.getElementById("distance-crop-slider");
+			let distCropValue = 500.0;
+			if (distCropSlider) {
+				const t = parseFloat(distCropSlider.value);
+				distCropValue = Math.max(0.1, Math.pow(t, 4) * 500.0);
+			}
+			gl.uniform1f(u_maxDistanceLocation, distCropValue);
+			
 			gl.uniformMatrix4fv(u_view, false, actualViewMatrix);
 			gl.uniformMatrix4fv(u_model, false, activeModelMatrix);
-			ext.drawArraysInstancedANGLE(gl.TRIANGLE_FAN, 0, 4, vertexCount);
+			ext.drawArraysInstancedANGLE(gl.TRIANGLE_FAN, 0, 4, renderedVertexCount);
 			// console.timeEnd('render')
 		} else {
 			gl.clear(gl.COLOR_BUFFER_BIT);
 			document.getElementById("spinner").style.display = "";
 			start = Date.now() + 2000;
 		}
-		const progress = (100 * vertexCount) / (splatData.length / rowLength);
+		const progress = (100 * vertexCount) / (splatData ? (splatData.length / rowLength) : vertexCount);
 		if (progress < 100) {
 			document.getElementById("progress").style.width = progress + "%";
 		} else {
