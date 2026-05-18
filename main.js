@@ -302,6 +302,170 @@ function translate4(a, x, y, z) {
 	];
 }
 
+function mat4ToQuaternion(m) {
+  let trace = m[0] + m[5] + m[10];
+  let S = 0;
+  let q = [0,0,0,1];
+  if (trace > 0) {
+    S = Math.sqrt(trace + 1.0) * 2;
+    q[3] = 0.25 * S;
+    q[0] = (m[6] - m[9]) / S;
+    q[1] = (m[8] - m[2]) / S;
+    q[2] = (m[1] - m[4]) / S;
+  } else if ((m[0] > m[5]) && (m[0] > m[10])) {
+    S = Math.sqrt(1.0 + m[0] - m[5] - m[10]) * 2;
+    q[3] = (m[6] - m[9]) / S;
+    q[0] = 0.25 * S;
+    q[1] = (m[1] + m[4]) / S;
+    q[2] = (m[8] + m[2]) / S;
+  } else if (m[5] > m[10]) {
+    S = Math.sqrt(1.0 + m[5] - m[0] - m[10]) * 2;
+    q[3] = (m[8] - m[2]) / S;
+    q[0] = (m[1] + m[4]) / S;
+    q[1] = 0.25 * S;
+    q[2] = (m[6] + m[9]) / S;
+  } else {
+    S = Math.sqrt(1.0 + m[10] - m[0] - m[5]) * 2;
+    q[3] = (m[1] - m[4]) / S;
+    q[0] = (m[8] + m[2]) / S;
+    q[1] = (m[6] + m[9]) / S;
+    q[2] = 0.25 * S;
+  }
+  return q;
+}
+
+function slerp(q1, q2, t) {
+  let cosHalfTheta = q1[0]*q2[0] + q1[1]*q2[1] + q1[2]*q2[2] + q1[3]*q2[3];
+  if (cosHalfTheta < 0) {
+    q2 = [-q2[0], -q2[1], -q2[2], -q2[3]];
+    cosHalfTheta = -cosHalfTheta;
+  }
+  if (Math.abs(cosHalfTheta) >= 1.0) return q1;
+  let halfTheta = Math.acos(cosHalfTheta);
+  let sinHalfTheta = Math.sqrt(1.0 - cosHalfTheta*cosHalfTheta);
+  if (Math.abs(sinHalfTheta) < 0.001) {
+    return [
+      q1[0] * 0.5 + q2[0] * 0.5,
+      q1[1] * 0.5 + q2[1] * 0.5,
+      q1[2] * 0.5 + q2[2] * 0.5,
+      q1[3] * 0.5 + q2[3] * 0.5
+    ];
+  }
+  let ratioA = Math.sin((1 - t) * halfTheta) / sinHalfTheta;
+  let ratioB = Math.sin(t * halfTheta) / sinHalfTheta;
+  return [
+    q1[0]*ratioA + q2[0]*ratioB,
+    q1[1]*ratioA + q2[1]*ratioB,
+    q1[2]*ratioA + q2[2]*ratioB,
+    q1[3]*ratioA + q2[3]*ratioB
+  ];
+}
+
+function lerpVec3(v1, v2, t) {
+  return [
+    v1[0] + (v2[0] - v1[0])*t,
+    v1[1] + (v2[1] - v1[1])*t,
+    v1[2] + (v2[2] - v1[2])*t
+  ];
+}
+
+function composeMat4(q, t) {
+  let x = q[0], y = q[1], z = q[2], w = q[3];
+  let x2 = x + x;
+  let y2 = y + y;
+  let z2 = z + z;
+  let xx = x * x2;
+  let xy = x * y2;
+  let xz = x * z2;
+  let yy = y * y2;
+  let yz = y * z2;
+  let zz = z * z2;
+  let wx = w * x2;
+  let wy = w * y2;
+  let wz = w * z2;
+  return [
+    1 - (yy + zz), xy + wz, xz - wy, 0,
+    xy - wz, 1 - (xx + zz), yz + wx, 0,
+    xz + wy, yz - wx, 1 - (xx + yy), 0,
+    t[0], t[1], t[2], 1
+  ];
+}
+
+function catmullRomVec3(p0, p1, p2, p3, t) {
+	let t2 = t * t;
+	let t3 = t2 * t;
+	
+	let h00 = 2*t3 - 3*t2 + 1;
+	let h10 = t3 - 2*t2 + t;
+	let h01 = -2*t3 + 3*t2;
+	let h11 = t3 - t2;
+	
+	let res = [0,0,0];
+	for (let i=0; i<3; i++) {
+		let v0 = (p2[i] - p0[i]) * 0.5;
+		let v1 = (p3[i] - p1[i]) * 0.5;
+		res[i] = h00*p1[i] + h10*v0 + h01*p2[i] + h11*v1;
+	}
+	return res;
+}
+
+function catmullRomQuat(q0, q1, q2, q3, t) {
+	// Ensure same hemisphere relative to previous
+	if (q0[0]*q1[0] + q0[1]*q1[1] + q0[2]*q1[2] + q0[3]*q1[3] < 0) q0 = [-q0[0], -q0[1], -q0[2], -q0[3]];
+	if (q2[0]*q1[0] + q2[1]*q1[1] + q2[2]*q1[2] + q2[3]*q1[3] < 0) q2 = [-q2[0], -q2[1], -q2[2], -q2[3]];
+	if (q3[0]*q2[0] + q3[1]*q2[1] + q3[2]*q2[2] + q3[3]*q2[3] < 0) q3 = [-q3[0], -q3[1], -q3[2], -q3[3]];
+	
+	let t2 = t * t;
+	let t3 = t2 * t;
+	let h00 = 2*t3 - 3*t2 + 1;
+	let h10 = t3 - 2*t2 + t;
+	let h01 = -2*t3 + 3*t2;
+	let h11 = t3 - t2;
+	
+	let res = [0,0,0,0];
+	for (let i=0; i<4; i++) {
+		let v0 = (q2[i] - q0[i]) * 0.5;
+		let v1 = (q3[i] - q1[i]) * 0.5;
+		res[i] = h00*q1[i] + h10*v0 + h01*q2[i] + h11*v1;
+	}
+	
+	let len = Math.sqrt(res[0]*res[0] + res[1]*res[1] + res[2]*res[2] + res[3]*res[3]);
+	if (len < 0.0001) return q1;
+	return [res[0]/len, res[1]/len, res[2]/len, res[3]/len];
+}
+
+function interpolateMat4Spline(m0, m1, m2, m3, t) {
+	let t0 = [m0[12], m0[13], m0[14]];
+	let t1 = [m1[12], m1[13], m1[14]];
+	let t2 = [m2[12], m2[13], m2[14]];
+	let t3 = [m3[12], m3[13], m3[14]];
+	
+	let q0 = mat4ToQuaternion(m0);
+	let q1 = mat4ToQuaternion(m1);
+	let q2 = mat4ToQuaternion(m2);
+	let q3 = mat4ToQuaternion(m3);
+	
+	let t_res = catmullRomVec3(t0, t1, t2, t3, t);
+	let q_res = catmullRomQuat(q0, q1, q2, q3, t);
+	
+	return composeMat4(q_res, t_res);
+}
+
+function getMat4Distance(m1, m2) {
+	let dx = m1[12] - m2[12];
+	let dy = m1[13] - m2[13];
+	let dz = m1[14] - m2[14];
+	let posDist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+	
+	let q1 = mat4ToQuaternion(m1);
+	let q2 = mat4ToQuaternion(m2);
+	let dot = q1[0]*q2[0] + q1[1]*q2[1] + q1[2]*q2[2] + q1[3]*q2[3];
+	dot = Math.max(-1.0, Math.min(1.0, dot));
+	let angleDist = Math.acos(Math.abs(dot));
+	
+	return posDist + angleDist * 2.0;
+}
+
 function createWorker(self) {
 	let buffer;
 	let vertexCount = 0;
@@ -651,11 +815,21 @@ let activeModelMatrix = [
 let activeDownsample = null
 async function main() {
 	let carousel = false;
+	let isPlayingKeyframes = false;
+	
+	const stopAnimations = () => {
+		carousel = false;
+		if (isPlayingKeyframes) {
+			isPlayingKeyframes = false;
+			const playBtn = document.getElementById('btn-kf-play');
+			if (playBtn) playBtn.innerText = 'Play';
+		}
+	};
 
 	const params = new URLSearchParams(location.search);
 	try {
 		viewMatrix = JSON.parse(decodeURIComponent(location.hash.slice(1)));
-		carousel = false;
+		stopAnimations();
 	} catch (err) { }
 	/*const url = new URL(
 		// "nike.splat",
@@ -985,7 +1159,7 @@ async function main() {
 	window.addEventListener(
 		"wheel",
 		(e) => {
-			carousel = false;
+			stopAnimations();
 			e.preventDefault();
 			const lineHeight = 10;
 			const scale =
@@ -1029,14 +1203,14 @@ async function main() {
 
 	let startX, startY, down;
 	canvas.addEventListener("mousedown", (e) => {
-		carousel = false;
+		stopAnimations();
 		e.preventDefault();
 		startX = e.clientX;
 		startY = e.clientY;
 		down = e.ctrlKey || e.metaKey ? 2 : 1;
 	});
 	canvas.addEventListener("contextmenu", (e) => {
-		carousel = false;
+		stopAnimations();
 		e.preventDefault();
 		startX = e.clientX;
 		startY = e.clientY;
@@ -1094,13 +1268,13 @@ async function main() {
 		(e) => {
 			e.preventDefault();
 			if (e.touches.length === 1) {
-				carousel = false;
+				stopAnimations();
 				startX = e.touches[0].clientX;
 				startY = e.touches[0].clientY;
 				down = 1;
 			} else if (e.touches.length === 2) {
 				//console.log('beep')
-				carousel = false;
+				stopAnimations();
 				startX = e.touches[0].clientX;
 				altX = e.touches[1].clientX;
 				startY = e.touches[0].clientY;
@@ -1248,6 +1422,113 @@ async function main() {
 	let globalMovementSpeed = 1.0;
 	let lastModelLoadTime = 0;
 
+	// Keyframe State & UI
+	let keyframesList = [];
+	isPlayingKeyframes = false;
+	let kfIndex = 0;
+	let kfProgress = 0.0;
+
+	document.getElementById('btn-kf-add')?.addEventListener('click', () => {
+		keyframesList.push([...viewMatrix]);
+		const countEl = document.getElementById('kf-count');
+		if (countEl) countEl.innerText = keyframesList.length;
+	});
+
+	document.getElementById('btn-kf-clear')?.addEventListener('click', () => {
+		keyframesList = [];
+		isPlayingKeyframes = false;
+		const playBtn = document.getElementById('btn-kf-play');
+		if (playBtn) playBtn.innerText = 'Play';
+		const countEl = document.getElementById('kf-count');
+		if (countEl) countEl.innerText = '0';
+	});
+
+	document.getElementById('btn-kf-play')?.addEventListener('click', () => {
+		if (keyframesList.length < 2) return;
+		isPlayingKeyframes = !isPlayingKeyframes;
+		const playBtn = document.getElementById('btn-kf-play');
+		if (playBtn) {
+			playBtn.innerText = isPlayingKeyframes ? 'Stop' : 'Play';
+		}
+		if (isPlayingKeyframes) {
+			kfIndex = 0;
+			kfProgress = 0.0;
+			carousel = false; // Intentionally just stop carousel
+			// If we are currently far from the first keyframe, we just snap to it to start.
+			viewMatrix = [...keyframesList[0]];
+		}
+	});
+
+	const LOCAL_STORAGE_KF_KEY = 'splat_saved_keyframes';
+
+	function getSavedKeyframes() {
+		try {
+			const data = localStorage.getItem(LOCAL_STORAGE_KF_KEY);
+			return data ? JSON.parse(data) : {};
+		} catch(e) {
+			return {};
+		}
+	}
+
+	function updateKfSavedList() {
+		const list = document.getElementById('kf-saved-list');
+		if (!list) return;
+		list.innerHTML = '<option value="">-- Saved Sequences --</option>';
+		const saved = getSavedKeyframes();
+		for (const key of Object.keys(saved)) {
+			const opt = document.createElement('option');
+			opt.value = key;
+			opt.innerText = key + ` (${saved[key].length} KFs)`;
+			list.appendChild(opt);
+		}
+	}
+
+	document.getElementById('btn-kf-save')?.addEventListener('click', () => {
+		if (keyframesList.length === 0) return alert('No keyframes to save!');
+		const nameInput = document.getElementById('kf-save-name');
+		const name = nameInput ? nameInput.value.trim() : '';
+		if (!name) return alert('Please enter a name for the sequence.');
+		
+		const saved = getSavedKeyframes();
+		saved[name] = keyframesList;
+		localStorage.setItem(LOCAL_STORAGE_KF_KEY, JSON.stringify(saved));
+		
+		if (nameInput) nameInput.value = '';
+		updateKfSavedList();
+	});
+
+	document.getElementById('btn-kf-load')?.addEventListener('click', () => {
+		const list = document.getElementById('kf-saved-list');
+		if (!list || !list.value) return alert('Please select a sequence to load.');
+		
+		const saved = getSavedKeyframes();
+		if (saved[list.value]) {
+			keyframesList = saved[list.value];
+			const countEl = document.getElementById('kf-count');
+			if (countEl) countEl.innerText = keyframesList.length;
+			
+			isPlayingKeyframes = false;
+			const playBtn = document.getElementById('btn-kf-play');
+			if (playBtn) playBtn.innerText = 'Play';
+			
+			// Optional: teleport camera to the first keyframe of loaded seq
+			viewMatrix = [...keyframesList[0]];
+		}
+	});
+
+	document.getElementById('btn-kf-delete')?.addEventListener('click', () => {
+		const list = document.getElementById('kf-saved-list');
+		if (!list || !list.value) return alert('Please select a sequence to delete.');
+		
+		const saved = getSavedKeyframes();
+		delete saved[list.value];
+		localStorage.setItem(LOCAL_STORAGE_KF_KEY, JSON.stringify(saved));
+		updateKfSavedList();
+	});
+
+	// Initialize the list on load
+	updateKfSavedList();
+
 	const frame = (now) => {
 		let inv = invert4(viewMatrix);
 
@@ -1300,7 +1581,7 @@ async function main() {
 		targetOy *= globalMovementSpeed;
 
 		if (targetTx || targetTy || targetTz || targetRy || targetRz || targetRx || targetOx || targetOy) {
-			carousel = false;
+			stopAnimations();
 		}
 
 		// Apply damping
@@ -1405,6 +1686,45 @@ async function main() {
 					viewMatrix = invert4(inv);
 				}
 		*/
+		if (isPlayingKeyframes && keyframesList.length > 1) {
+			const kfSpeedSlider = document.getElementById('kf-speed');
+			const speed = parseFloat(kfSpeedSlider ? kfSpeedSlider.value : 2.0);
+			const timeDelta = lastFrame === 0 ? 0 : (now - lastFrame) / 1000.0;
+			
+			const len = keyframesList.length;
+			const m1 = keyframesList[kfIndex];
+			const m2 = keyframesList[(kfIndex + 1) % len];
+			
+			// Compute distance to normalize speed so movement is constant
+			let dist = getMat4Distance(m1, m2);
+			if (dist < 0.001) dist = 0.001; // Avoid division by zero
+			
+			// Adjust progress based on time delta, speed, and inversely proportional to distance
+			kfProgress += (speed * 0.5) * timeDelta / dist;
+			
+			while (kfProgress >= 1.0) {
+				kfProgress -= 1.0;
+				kfIndex = (kfIndex + 1) % len;
+			}
+			
+			const idx0 = (kfIndex - 1 + len) % len;
+			const idx1 = kfIndex;
+			const idx2 = (kfIndex + 1) % len;
+			const idx3 = (kfIndex + 2) % len;
+			
+			const mm0 = keyframesList[idx0];
+			const mm1 = keyframesList[idx1];
+			const mm2 = keyframesList[idx2];
+			const mm3 = keyframesList[idx3];
+			
+			// Tween viewMatrix smoothly using a Catmull-Rom spline
+			if (len > 2) {
+				viewMatrix = interpolateMat4Spline(mm0, mm1, mm2, mm3, kfProgress);
+			} else {
+				viewMatrix = interpolateMat4(mm1, mm2, kfProgress);
+			}
+		}
+
 		if (activeKeys.includes(" ")) {
 			jumpDelta = Math.min(1, jumpDelta + 0.05);
 		} else {
@@ -1514,7 +1834,7 @@ async function main() {
 	window.addEventListener("hashchange", (e) => {
 		try {
 			viewMatrix = JSON.parse(decodeURIComponent(location.hash.slice(1)));
-			carousel = false;
+			stopAnimations();
 		} catch (err) { }
 	});
 
